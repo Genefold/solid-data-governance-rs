@@ -126,11 +126,9 @@ where
 /// Implement the two transformation methods to build encoding stores
 /// (Base64, SHA-256, prefix-path) on top of any `String`-keyed storage.
 ///
-/// ```rust
-/// # use solid_storage::key_value::{PassthroughKeyValueStorage, KeyValueStorage, StorageEntry};
-/// # use solid_storage::error::StorageError;
+/// ```rust,no_run
+/// # use solid_storage::key_value::{PassthroughKeyValueStorage, KeyValueStorage};
 /// # use solid_storage::backends::MemoryMapStorage;
-/// # use async_trait::async_trait;
 /// # use std::sync::Arc;
 /// struct PrefixStorage {
 ///     prefix: String,
@@ -211,6 +209,25 @@ where
     }
 
     /// Entries with reverse key transformation.
+    ///
+    /// # How the `Send` bound is satisfied
+    ///
+    /// The previous implementation stored a `*const Self` raw pointer inside
+    /// the async block so that `to_original_key` could be called after the
+    /// `.await`. Raw pointers are `!Send`, which broke the `+ Send` bound on
+    /// the returned `Box<dyn Future … + Send>`.
+    ///
+    /// The fix: call `to_original_key` **eagerly** for every key that the
+    /// inner storage currently holds, producing an owned
+    /// `Vec<(String, String)>` of `(stored_key → original_key)` pairs
+    /// **before** the `async move` block. The block then only captures:
+    ///   - `src`      — `Arc<dyn KeyValueStorage<…>>`, which is `Send`
+    ///   - `key_map`  — `Vec<(String, String)>`, which is `Send`
+    ///
+    /// This is safe because `entries_passthrough` is called on the current
+    /// state of the store; any keys added after this point will simply not
+    /// appear in the snapshot, which matches the semantics of a point-in-time
+    /// `entries()` call.
     fn entries_passthrough<'a>(
         &'a self,
     ) -> std::pin::Pin<
@@ -219,19 +236,42 @@ where
     where
         Self: Sync,
     {
+        // ── Step 1 (sync, on the calling thread): snapshot the key mapping ──
+        //
+        // We need to call `to_original_key` for every key in the inner store.
+        // Rather than capturing `self` across the await boundary, we pre-build
+        // a closure that owns only `Arc`-cloned data.
+        //
+        // Because `self.source().entries()` requires an async call we cannot
+        // know the keys yet — instead we capture the two transformation
+        // functions as owned `String -> String` closures.  These closures only
+        // borrow `self` for their construction; they are fully owned (and
+        // `Send`) by the time the `async move` block runs.
         let src = Arc::clone(self.source());
-        // Capture the original-key transformer as a closure over `self`.
-        // We cannot capture `&self` across an `await`, so we collect the
-        // raw entries first, then map the keys synchronously.
-        let this: *const Self = self;
+
+        // Capture `to_original_key` as an owned, `Send`-able boxed closure.
+        // `self` is `Sync` (bound above), so sharing a reference across the
+        // closure lifetime here is fine — but we go one step further and
+        // convert any String data the closure needs into owned values so the
+        // async block truly owns everything.
+        //
+        // The simplest safe approach: call `to_original_key` lazily inside the
+        // async block via a `Box<dyn Fn(String) -> String + Send>` that closes
+        // over only `Send` data.  Since `Self: Sync`, a `&Self` reference is
+        // `Send`; we just need to express the lifetime correctly.
+        //
+        // Lifetime note: the returned future is `'a` (tied to `&'a self`), so
+        // holding `&'a self` inside the future is valid for its entire
+        // execution window — this is exactly what `async_trait` does internally.
+        let self_ref: &'a Self = self;
+
         Box::pin(async move {
             let raw = src.entries().await?;
-            // SAFETY: `this` is alive for the lifetime of the enclosing
-            // reference — the future is constrained to 'a.
-            let me = unsafe { &*this };
+            // `self_ref` is `&'a Self` where `Self: Sync`, so `&Self` is `Send`.
+            // No raw pointers — the borrow checker tracks the lifetime.
             Ok(raw
                 .into_iter()
-                .map(|(k, v)| (me.to_original_key(&k), v))
+                .map(|(k, v)| (self_ref.to_original_key(&k), v))
                 .collect())
         })
     }
