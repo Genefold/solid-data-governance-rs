@@ -33,19 +33,53 @@ jobs:
       - name: Start solid-community-rs
         shell: bash
         run: |
-          ./target/release/cli --port 3000 &
+          ./target/release/cli \
+            --port 3000 \
+            --host 0.0.0.0 \
+            --base-url http://127.0.0.1:3000/ &
           echo "SERVER_PID=$!" >> "$GITHUB_ENV"
 
       - name: Wait for server
         shell: bash
         run: |
           for i in $(seq 1 30); do
-            curl --silent --fail --output /dev/null http://localhost:3000/ && break
+            curl --silent --fail --output /dev/null http://127.0.0.1:3000/ && break
             echo "Waiting... ($i)"
             sleep 1
           done
-          curl --silent --fail --output /dev/null http://localhost:3000/ \
+          curl --silent --fail --output /dev/null http://127.0.0.1:3000/ \
             || (echo "Server never became ready" && exit 1)
+
+      - name: Seed WebID profile documents
+        shell: bash
+        run: |
+          # CTH requires alice and bob WebID documents to exist before it starts.
+          # We PUT minimal Turtle profile cards so the server returns 200 + RDF
+          # when CTH fetches them during REGISTER CLIENTS.
+
+          for USER in alice bob; do
+            # Ensure parent containers exist (POST to create if needed)
+            curl --silent --output /dev/null --request POST \
+              --header 'Content-Type: text/turtle' \
+              --header 'Slug: profile' \
+              --data '' \
+              http://127.0.0.1:3000/${USER}/ || true
+
+            # PUT the WebID card
+            curl --silent --show-error --fail \
+              --request PUT \
+              --header 'Content-Type: text/turtle' \
+              --data "@prefix foaf: <http://xmlns.com/foaf/0.1/> .
+          <http://127.0.0.1:3000/${USER}/profile/card#me>
+              a foaf:Person ;
+              foaf:name \"${USER^}\" ." \
+              http://127.0.0.1:3000/${USER}/profile/card
+            echo "Seeded ${USER} WebID: HTTP $?"
+          done
+
+          # Verify both cards are readable
+          curl --silent --fail -I http://127.0.0.1:3000/alice/profile/card
+          curl --silent --fail -I http://127.0.0.1:3000/bob/profile/card
 
       - name: Clone specification-tests
         shell: bash
@@ -77,29 +111,41 @@ jobs:
           @prefix earl: <http://www.w3.org/ns/earl#> .
           @prefix doap: <http://usefulinc.com/ns/doap#> .
 
-          <server>
+          <https://github.com/tuned-org-uk/solid-community-rs#server>
               a earl:Software, earl:TestSubject ;
               doap:name "solid-community-rs" ;
               doap:programming-language "Rust" ;
               doap:homepage <https://github.com/tuned-org-uk/solid-community-rs> ;
-              solid-test:skip "acp", "wac", "authentication" ;
-              solid-test:serverRoot <http://host.containers.internal:3000/> .
+              solid-test:skip "acp wac authentication" ;
+              solid-test:serverRoot <http://127.0.0.1:3000/> .
           TTL
 
       - name: Write CTH env file
         shell: bash
         run: |
           cat > cth.env <<'ENV'
-          SERVER_ROOT=http://host.containers.internal:3000/
-          users.alice.webid=http://host.containers.internal:3000/alice/profile/card#me
+          SERVER_ROOT=http://127.0.0.1:3000/
+          users.alice.webid=http://127.0.0.1:3000/alice/profile/card#me
           users.alice.username=alice
-          users.alice.password=
-          users.bob.webid=http://host.containers.internal:3000/bob/profile/card#me
+          users.alice.password=unused
+          users.bob.webid=http://127.0.0.1:3000/bob/profile/card#me
           users.bob.username=bob
-          users.bob.password=
+          users.bob.password=unused
           ORIGIN=http://example.org
           CTH_TIMEOUT=10000
           ENV
+
+      - name: Show generated config (debug)
+        shell: bash
+        run: |
+          echo "=== test-subjects.ttl ==="
+          cat config/test-subjects.ttl
+          echo "=== cth.env ==="
+          cat cth.env
+          echo "=== alice WebID ==="
+          curl -s http://127.0.0.1:3000/alice/profile/card
+          echo "=== bob WebID ==="
+          curl -s http://127.0.0.1:3000/bob/profile/card
 
       - name: Create output directories
         shell: bash
@@ -112,16 +158,15 @@ jobs:
         shell: bash
         run: |
           podman run --rm \
-            --user "$(id -u):$(id -g)" \
+            --network=host \
             --env-file="$(pwd)/cth.env" \
-            --add-host=host.containers.internal:host-gateway \
             --volume "$(pwd)/specification-tests:/data:ro" \
             --volume "$(pwd)/config:/app/config:ro" \
             --volume "$(pwd)/reports:/reports" \
             --volume "$(pwd)/target:/app/target" \
             solidproject/conformance-test-harness \
             --output=/reports \
-            --target=server \
+            --target=https://github.com/tuned-org-uk/solid-community-rs#server \
             --skip-teardown
 
       - name: Upload CTH reports
