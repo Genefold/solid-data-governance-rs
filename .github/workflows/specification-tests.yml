@@ -53,38 +53,33 @@ jobs:
       - name: Seed WebID profile documents
         shell: bash
         run: |
-          # Write Turtle to temp files with no leading indentation,
-          # then PUT them. solid:oidcIssuer points at the server root
-          # so CTH can read the issuer URI from the card as a fallback.
-
           cat > /tmp/alice-card.ttl <<'TTL'
-          @prefix foaf: <http://xmlns.com/foaf/0.1/> .
-          @prefix solid: <http://www.w3.org/ns/solid/terms#> .
-          @prefix pim: <http://www.w3.org/ns/pim/space#> .
+@prefix foaf: <http://xmlns.com/foaf/0.1/> .
+@prefix solid: <http://www.w3.org/ns/solid/terms#> .
+@prefix pim: <http://www.w3.org/ns/pim/space#> .
 
-          <http://127.0.0.1:3000/alice/profile/card#me>
-              a foaf:Person ;
-              foaf:name "Alice" ;
-              solid:oidcIssuer <http://127.0.0.1:3000/> ;
-              pim:storage <http://127.0.0.1:3000/alice/> .
-          TTL
+<http://127.0.0.1:3000/alice/profile/card#me>
+    a foaf:Person ;
+    foaf:name "Alice" ;
+    solid:oidcIssuer <http://127.0.0.1:3000/> ;
+    pim:storage <http://127.0.0.1:3000/alice/> .
+TTL
 
-                    cat > /tmp/bob-card.ttl <<'TTL'
-          @prefix foaf: <http://xmlns.com/foaf/0.1/> .
-          @prefix solid: <http://www.w3.org/ns/solid/terms#> .
-          @prefix pim: <http://www.w3.org/ns/pim/space#> .
+          cat > /tmp/bob-card.ttl <<'TTL'
+@prefix foaf: <http://xmlns.com/foaf/0.1/> .
+@prefix solid: <http://www.w3.org/ns/solid/terms#> .
+@prefix pim: <http://www.w3.org/ns/pim/space#> .
 
-          <http://127.0.0.1:3000/bob/profile/card#me>
-              a foaf:Person ;
-              foaf:name "Bob" ;
-              solid:oidcIssuer <http://127.0.0.1:3000/> ;
-              pim:storage <http://127.0.0.1:3000/bob/> .
-          TTL
+<http://127.0.0.1:3000/bob/profile/card#me>
+    a foaf:Person ;
+    foaf:name "Bob" ;
+    solid:oidcIssuer <http://127.0.0.1:3000/> ;
+    pim:storage <http://127.0.0.1:3000/bob/> .
+TTL
 
           for USER in alice bob; do
             echo "--- seeding ${USER} ---"
 
-            # Create parent containers (ignore errors if already exist)
             curl --silent --output /dev/null \
               --request POST \
               --header 'Content-Type: text/turtle' \
@@ -97,7 +92,6 @@ jobs:
               --header 'Slug: profile' \
               http://127.0.0.1:3000/${USER}/ || true
 
-            # PUT the WebID card
             HTTP_STATUS=$(curl --silent --output /dev/null --write-out "%{http_code}" \
               --request PUT \
               --header 'Content-Type: text/turtle' \
@@ -118,10 +112,10 @@ jobs:
             --header 'Slug: test' \
             http://127.0.0.1:3000/alice/ || true
 
-          # Verify both cards are readable
           echo "--- verifying alice ---"
           curl --silent --fail --header 'Accept: text/turtle' \
             http://127.0.0.1:3000/alice/profile/card
+
           echo "--- verifying bob ---"
           curl --silent --fail --header 'Accept: text/turtle' \
             http://127.0.0.1:3000/bob/profile/card
@@ -138,54 +132,49 @@ jobs:
         run: |
           mkdir -p config
           cat > config/application.yaml <<'YAML'
-          subjects: /app/config/test-subjects.ttl
-          sources:
-            - https://solidproject.org/TR/protocol
-            - https://github.com/solid-contrib/specification-tests/blob/main/protocol/solid-protocol-test-manifest.ttl
-            - https://github.com/solid-contrib/specification-tests/blob/main/protocol/requirement-comments.ttl
-          mappings:
-            - prefix: https://github.com/solid-contrib/specification-tests/blob/main
-              path: /data
-          YAML
+subjects: /app/config/test-subjects.ttl
+sources:
+  - https://solidproject.org/TR/protocol
+  - https://github.com/solid-contrib/specification-tests/blob/main/protocol/solid-protocol-test-manifest.ttl
+  - https://github.com/solid-contrib/specification-tests/blob/main/protocol/requirement-comments.ttl
+mappings:
+  - prefix: https://github.com/solid-contrib/specification-tests/blob/main
+    path: /data
+YAML
 
       - name: Write config/test-subjects.ttl
         shell: bash
         run: |
           cat > config/test-subjects.ttl <<'TTL'
-          @prefix solid-test: <https://github.com/solid/conformance-test-harness/vocab#> .
-          @prefix earl: <http://www.w3.org/ns/earl#> .
-          @prefix doap: <http://usefulinc.com/ns/doap#> .
+@prefix solid-test: <https://github.com/solid/conformance-test-harness/vocab#> .
+@prefix earl: <http://www.w3.org/ns/earl#> .
+@prefix doap: <http://usefulinc.com/ns/doap#> .
 
-          <https://github.com/tuned-org-uk/solid-community-rs#server>
-              a earl:Software, earl:TestSubject ;
-              doap:name "solid-community-rs" ;
-              doap:programming-language "Rust" ;
-              doap:homepage <https://github.com/tuned-org-uk/solid-community-rs> ;
-              solid-test:skip "acp wac authentication" ;
-              solid-test:serverRoot <http://127.0.0.1:3000/> .
-          TTL
+<https://github.com/tuned-org-uk/solid-community-rs#server>
+    a earl:Software, earl:TestSubject ;
+    doap:name "solid-community-rs" ;
+    doap:programming-language "Rust" ;
+    doap:homepage <https://github.com/tuned-org-uk/solid-community-rs> ;
+    solid-test:skip "acp wac authentication" ;
+    solid-test:serverRoot <http://127.0.0.1:3000/> .
+TTL
 
       - name: Write CTH env file
         shell: bash
         run: |
-          # Use the exact UPPERCASE variable names required by CTH (see USAGE.md).
-          # SOLID_IDENTITY_PROVIDER is the URI passed to withOptionalLocalhostSupport()
-          # inside AuthManager.authenticate() — without it uri is null -> NPE.
-          # TEST_CONTAINER is alice's absolute test container URL.
+          # Only core config — no auth vars. Supplying USERS_*_USERNAME/PASSWORD
+          # or SOLID_IDENTITY_PROVIDER triggers CTH's OIDC bootstrap which calls
+          # /.well-known/openid-configuration. Since this server has no IdP that
+          # endpoint returns 404 and CTH aborts before running any tests.
           cat > cth.env <<'ENV'
-          SOLID_IDENTITY_PROVIDER=http://127.0.0.1:3000/
-          RESOURCE_SERVER_ROOT=http://127.0.0.1:3000
-          TEST_CONTAINER=http://127.0.0.1:3000/alice/test/
-          USERS_ALICE_WEBID=http://127.0.0.1:3000/alice/profile/card#me
-          USERS_ALICE_USERNAME=alice
-          USERS_ALICE_PASSWORD=unused
-          USERS_BOB_WEBID=http://127.0.0.1:3000/bob/profile/card#me
-          USERS_BOB_USERNAME=bob
-          USERS_BOB_PASSWORD=unused
-          ORIGIN=http://example.org
-          CTH_TIMEOUT=10000
-          quarkus.log.category."org.solid.testharness.http.AuthManager".level=DEBUG
-          ENV
+USERS_ALICE_WEBID=http://127.0.0.1:3000/alice/profile/card#me
+USERS_BOB_WEBID=http://127.0.0.1:3000/bob/profile/card#me
+RESOURCE_SERVER_ROOT=http://127.0.0.1:3000
+TEST_CONTAINER=http://127.0.0.1:3000/alice/test/
+CTH_TIMEOUT=10000
+quarkus.log.category."com.intuit.karate".level=DEBUG
+quarkus.log.category."org.solid.testharness.http.Client".level=DEBUG
+ENV
 
       - name: Show generated config (debug)
         shell: bash
