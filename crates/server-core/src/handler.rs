@@ -1,28 +1,8 @@
-//! Handler traits: `HttpHandler` and `OperationHttpHandler`.
+//! Handler re-exports for `server-core`.
 //!
-//! These traits form the spine of the request processing pipeline,
-//! mirroring the TypeScript `HttpHandler` / `OperationHttpHandler` interfaces.
+//! The canonical trait definitions live in `http-types` (behind the `axum`
+//! feature flag) to keep them usable without depending on the full
+//! server-core crate.  This module simply re-exports them so that code which
+//! already depends on `server-core` can import from a single place.
 
-use async_trait::async_trait;
-use axum::{
-    body::Body,
-    http::{Request, Response},
-    response::IntoResponse,
-};
-use http_types::{Operation, SolidError};
-
-/// Processes a raw HTTP request and produces a response.
-///
-/// Mirrors the TypeScript `HttpHandler`.
-#[async_trait]
-pub trait HttpHandler: Send + Sync {
-    async fn handle(&self, req: Request<Body>) -> Response<Body>;
-}
-
-/// Processes a parsed `Operation` and returns a `Response`.
-///
-/// Mirrors the TypeScript `OperationHttpHandler`.
-#[async_trait]
-pub trait OperationHttpHandler: Send + Sync {
-    async fn handle_operation(&self, op: Operation) -> Result<Response<Body>, SolidError>;
-}
+pub use http_types::handler::{HttpHandler, OperationHttpHandler, WaterfallHandler};

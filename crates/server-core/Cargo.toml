@@ -5,7 +5,7 @@ edition = "2021"
 description = "Request pipeline, routing, middleware, lifecycle management, and app runner"
 
 [dependencies]
-http-types = { path = "../http-types" }
+http-types = { path = "../http-types", features = ["axum"] }
 storage = { path = "../storage" }
 authz = { path = "../authz" }
 identity = { path = "../identity" }

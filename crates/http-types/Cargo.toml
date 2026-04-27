@@ -2,7 +2,12 @@
 name = "http-types"
 version = "0.1.0"
 edition = "2021"
-description = "Core HTTP domain types: Operation, Representation, Metadata, ResourceIdentifier, and error hierarchy"
+description = "Core HTTP domain types: Operation, Representation, Metadata, ResourceIdentifier, error hierarchy, and handler traits"
+
+[features]
+# Enables axum IntoResponse impl on SolidError and the HttpHandler / OperationHttpHandler traits.
+# Kept behind a feature flag so pure-domain consumers (storage, authz) don't pull in axum.
+axum = ["dep:axum", "dep:async-trait"]
 
 [dependencies]
 serde = { workspace = true }
@@ -12,3 +17,6 @@ bytes = { workspace = true }
 mime = { workspace = true }
 url = { workspace = true }
 hyper = { workspace = true }
+# Optional — only when the "axum" feature is enabled.
+axum = { workspace = true, optional = true }
+async-trait = { workspace = true, optional = true }
