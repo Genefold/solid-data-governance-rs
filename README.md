@@ -127,6 +127,9 @@ cargo run --bin solid-server
 
 # 4. In a second terminal — run the integration tests
 cargo run --bin solid-test
+
+# how to Log
+RUST_LOG=server_core=debug cargo run --bin solid-server
 ```
 
 ---
