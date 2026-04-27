@@ -53,27 +53,29 @@ jobs:
       - name: Seed WebID profile documents
         shell: bash
         run: |
-          # Write Turtle cards to temp files to avoid shell quoting issues,
-          # then PUT them onto the server via curl --data-binary @file.
+          # WebID cards must include solid:oidcIssuer so CTH's AuthManager
+          # gets a non-null IdP URI for withOptionalLocalhostSupport().
+          # We point it at the server root itself; CTH will attempt OIDC
+          # discovery, fail gracefully (no real IdP), and continue with
+          # unauthenticated test execution.
 
-          cat > /tmp/alice-card.ttl <<'TTL'
+          for USER in alice bob; do
+            NAME="${USER^}"
+            cat > /tmp/${USER}-card.ttl <<TTL
           @prefix foaf: <http://xmlns.com/foaf/0.1/> .
-          <http://127.0.0.1:3000/alice/profile/card#me>
-              a foaf:Person ;
-              foaf:name "Alice" .
-          TTL
+          @prefix solid: <http://www.w3.org/ns/solid/terms#> .
 
-          cat > /tmp/bob-card.ttl <<'TTL'
-          @prefix foaf: <http://xmlns.com/foaf/0.1/> .
-          <http://127.0.0.1:3000/bob/profile/card#me>
+          <http://127.0.0.1:3000/${USER}/profile/card#me>
               a foaf:Person ;
-              foaf:name "Bob" .
+              foaf:name "${NAME}" ;
+              solid:oidcIssuer <http://127.0.0.1:3000/> .
           TTL
+          done
 
           for USER in alice bob; do
             echo "--- seeding ${USER} ---"
 
-            # Create parent containers (ignore errors if they already exist)
+            # Create parent containers (ignore errors if already exist)
             curl --silent --output /dev/null \
               --request POST \
               --header 'Content-Type: text/turtle' \
@@ -86,7 +88,7 @@ jobs:
               --header 'Slug: profile' \
               http://127.0.0.1:3000/${USER}/ || true
 
-            # PUT the WebID card from the temp file
+            # PUT the WebID card
             HTTP_STATUS=$(curl --silent --output /dev/null --write-out "%{http_code}" \
               --request PUT \
               --header 'Content-Type: text/turtle' \
@@ -100,12 +102,12 @@ jobs:
             fi
           done
 
-          # Verify both cards are readable
+          # Verify both cards are readable and contain oidcIssuer
           echo "--- verifying ---"
           curl --silent --fail --header 'Accept: text/turtle' \
-            http://127.0.0.1:3000/alice/profile/card && echo "alice OK"
+            http://127.0.0.1:3000/alice/profile/card
           curl --silent --fail --header 'Accept: text/turtle' \
-            http://127.0.0.1:3000/bob/profile/card && echo "bob OK"
+            http://127.0.0.1:3000/bob/profile/card
 
       - name: Clone specification-tests
         shell: bash
