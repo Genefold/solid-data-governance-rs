@@ -30,10 +30,17 @@ jobs:
       - name: Build server (release)
         run: cargo build --release -p cli
 
+      - name: Resolve host IP (for container → host networking)
+        shell: bash
+        run: |
+          HOST_IP=$(ip -4 route show default | awk '{print $3}' | head -1)
+          echo "HOST_IP=$HOST_IP" >> "$GITHUB_ENV"
+          echo "Server will be reachable inside container at: $HOST_IP:3000"
+
       - name: Start solid-community-rs
         shell: bash
         run: |
-          ./target/release/cli --port 3000 &
+          ./target/release/cli --port 3000 --host 0.0.0.0 &
           echo "SERVER_PID=$!" >> "$GITHUB_ENV"
 
       - name: Wait for server
@@ -72,34 +79,42 @@ jobs:
       - name: Write config/test-subjects.ttl
         shell: bash
         run: |
-          cat > config/test-subjects.ttl <<'TTL'
+          cat > config/test-subjects.ttl <<TTL
           @prefix solid-test: <https://github.com/solid/conformance-test-harness/vocab#> .
           @prefix earl: <http://www.w3.org/ns/earl#> .
           @prefix doap: <http://usefulinc.com/ns/doap#> .
 
-          <server>
+          <https://github.com/tuned-org-uk/solid-community-rs#server>
               a earl:Software, earl:TestSubject ;
               doap:name "solid-community-rs" ;
               doap:programming-language "Rust" ;
               doap:homepage <https://github.com/tuned-org-uk/solid-community-rs> ;
-              solid-test:skip "acp", "wac", "authentication" ;
-              solid-test:serverRoot <http://host.containers.internal:3000/> .
+              solid-test:skip "acp wac authentication" ;
+              solid-test:serverRoot <http://${HOST_IP}:3000/> .
           TTL
 
       - name: Write CTH env file
         shell: bash
         run: |
-          cat > cth.env <<'ENV'
-          SERVER_ROOT=http://host.containers.internal:3000/
-          users.alice.webid=http://host.containers.internal:3000/alice/profile/card#me
+          cat > cth.env <<ENV
+          SERVER_ROOT=http://${HOST_IP}:3000/
+          users.alice.webid=http://${HOST_IP}:3000/alice/profile/card#me
           users.alice.username=alice
           users.alice.password=
-          users.bob.webid=http://host.containers.internal:3000/bob/profile/card#me
+          users.bob.webid=http://${HOST_IP}:3000/bob/profile/card#me
           users.bob.username=bob
           users.bob.password=
           ORIGIN=http://example.org
           CTH_TIMEOUT=10000
           ENV
+
+      - name: Show generated config (debug)
+        shell: bash
+        run: |
+          echo "=== test-subjects.ttl ==="
+          cat config/test-subjects.ttl
+          echo "=== cth.env ==="
+          cat cth.env
 
       - name: Create output directories
         shell: bash
@@ -112,16 +127,15 @@ jobs:
         shell: bash
         run: |
           podman run --rm \
-            --user "$(id -u):$(id -g)" \
+            --network=host \
             --env-file="$(pwd)/cth.env" \
-            --add-host=host.containers.internal:host-gateway \
             --volume "$(pwd)/specification-tests:/data:ro" \
             --volume "$(pwd)/config:/app/config:ro" \
             --volume "$(pwd)/reports:/reports" \
             --volume "$(pwd)/target:/app/target" \
             solidproject/conformance-test-harness \
             --output=/reports \
-            --target=server \
+            --target=https://github.com/tuned-org-uk/solid-community-rs#server \
             --skip-teardown
 
       - name: Upload CTH reports
