@@ -13,12 +13,13 @@
 //!   -V, --version             Print version
 //! ```
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 use server_core::{
     app::{App, AppConfig},
     pipeline::RequestPipeline,
 };
+use std::net::SocketAddr;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
@@ -47,6 +48,7 @@ pub struct ServeCli {
     pub port: u16,
 
     /// Hostname or IP address to bind to.
+    /// "localhost" resolves to 127.0.0.1; use "0.0.0.0" to bind on all interfaces.
     #[arg(long, default_value = "localhost", env = "CSS_HOST")]
     pub host: String,
 
@@ -65,15 +67,23 @@ async fn main() -> Result<()> {
     let cli = ServeCli::parse();
     init_tracing(&cli.log_level);
 
-    let addr: std::net::SocketAddr =
-        format!("{}:{}", cli.host, cli.port).parse()?;
+    // ── Resolve host → SocketAddr ────────────────────────────────────────────
+    //
+    // `SocketAddr::parse` only accepts IP literals ("127.0.0.1:3000"), not
+    // hostnames ("localhost:3000").  We use `tokio::net::lookup_host` to
+    // perform a real DNS lookup and take the first result.  If the lookup
+    // fails we fall back to binding on all interfaces so the server still
+    // starts in minimal environments (containers, CI) where DNS may be
+    // unavailable.
+    let addr: SocketAddr = resolve_host(&cli.host, cli.port).await?;
 
     info!(
-        base_url = %cli.base_url,
-        host     = %cli.host,
-        port     = cli.port,
+        base_url  = %cli.base_url,
+        host      = %cli.host,
+        port      = cli.port,
+        bind_addr = %addr,
         log_level = %cli.log_level,
-        root_dir = ?cli.root_dir,
+        root_dir  = ?cli.root_dir,
         "Starting Solid Community Server"
     );
 
@@ -88,7 +98,34 @@ async fn main() -> Result<()> {
     app.start().await
 }
 
-// ── shared helpers ──────────────────────────────────────────────────────────
+// ── helpers ──────────────────────────────────────────────────────────────────
+
+/// Resolve a hostname + port to the first [`SocketAddr`] returned by the OS.
+///
+/// Falls back to `0.0.0.0:<port>` (bind-all) when DNS resolution fails so
+/// that the server starts even in environments with no hostname resolution.
+async fn resolve_host(host: &str, port: u16) -> Result<SocketAddr> {
+    // Fast path: already an IP literal.
+    if let Ok(addr) = format!("{host}:{port}").parse::<SocketAddr>() {
+        return Ok(addr);
+    }
+
+    // DNS path: resolve via the system resolver.
+    match tokio::net::lookup_host(format!("{host}:{port}")).await {
+        Ok(mut addrs) => addrs
+            .next()
+            .with_context(|| format!("DNS lookup for '{host}' returned no addresses")),
+        Err(e) => {
+            tracing::warn!(
+                host,
+                port,
+                error = %e,
+                "DNS lookup failed — falling back to 0.0.0.0:{port}"
+            );
+            Ok(SocketAddr::from(([0, 0, 0, 0], port)))
+        }
+    }
+}
 
 /// Initialise `tracing-subscriber`.  Honours `RUST_LOG`; falls back to
 /// the value of `--log-level` / `CSS_LOG_LEVEL`.
