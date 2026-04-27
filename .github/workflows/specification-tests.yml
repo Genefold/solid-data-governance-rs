@@ -50,6 +50,37 @@ jobs:
           curl --silent --fail --output /dev/null http://127.0.0.1:3000/ \
             || (echo "Server never became ready" && exit 1)
 
+      - name: Seed WebID profile documents
+        shell: bash
+        run: |
+          # CTH requires alice and bob WebID documents to exist before it starts.
+          # We PUT minimal Turtle profile cards so the server returns 200 + RDF
+          # when CTH fetches them during REGISTER CLIENTS.
+
+          for USER in alice bob; do
+            # Ensure parent containers exist (POST to create if needed)
+            curl --silent --output /dev/null --request POST \
+              --header 'Content-Type: text/turtle' \
+              --header 'Slug: profile' \
+              --data '' \
+              http://127.0.0.1:3000/${USER}/ || true
+
+            # PUT the WebID card
+            curl --silent --show-error --fail \
+              --request PUT \
+              --header 'Content-Type: text/turtle' \
+              --data "@prefix foaf: <http://xmlns.com/foaf/0.1/> .
+          <http://127.0.0.1:3000/${USER}/profile/card#me>
+              a foaf:Person ;
+              foaf:name \"${USER^}\" ." \
+              http://127.0.0.1:3000/${USER}/profile/card
+            echo "Seeded ${USER} WebID: HTTP $?"
+          done
+
+          # Verify both cards are readable
+          curl --silent --fail -I http://127.0.0.1:3000/alice/profile/card
+          curl --silent --fail -I http://127.0.0.1:3000/bob/profile/card
+
       - name: Clone specification-tests
         shell: bash
         run: |
@@ -92,11 +123,14 @@ jobs:
       - name: Write CTH env file
         shell: bash
         run: |
-          # No user credentials — server has no IdP so CTH must run
-          # unauthenticated. Omitting users.*.webid causes CTH to skip
-          # the REGISTER CLIENTS phase and go straight to running tests.
           cat > cth.env <<'ENV'
           SERVER_ROOT=http://127.0.0.1:3000/
+          users.alice.webid=http://127.0.0.1:3000/alice/profile/card#me
+          users.alice.username=alice
+          users.alice.password=unused
+          users.bob.webid=http://127.0.0.1:3000/bob/profile/card#me
+          users.bob.username=bob
+          users.bob.password=unused
           ORIGIN=http://example.org
           CTH_TIMEOUT=10000
           ENV
@@ -108,8 +142,10 @@ jobs:
           cat config/test-subjects.ttl
           echo "=== cth.env ==="
           cat cth.env
-          echo "=== server health ==="
-          curl -v http://127.0.0.1:3000/ 2>&1 | head -30
+          echo "=== alice WebID ==="
+          curl -s http://127.0.0.1:3000/alice/profile/card
+          echo "=== bob WebID ==="
+          curl -s http://127.0.0.1:3000/bob/profile/card
 
       - name: Create output directories
         shell: bash
