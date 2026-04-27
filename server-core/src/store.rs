@@ -34,8 +34,25 @@ pub struct LdpStore {
 }
 
 impl LdpStore {
+    /// Create a new store pre-seeded with the root container `/`.
+    ///
+    /// The root must always exist so that `GET /` and `HEAD /` return 200
+    /// even before any resource has been written (health-suite tests 1 & 3).
     pub fn new() -> Arc<Self> {
-        Arc::new(Self::default())
+        let store = Arc::new(Self::default());
+        {
+            let mut map = store.inner.write().unwrap();
+            map.insert(
+                "/".to_owned(),
+                Entry {
+                    body: Vec::new(),
+                    content_type: "text/turtle".to_owned(),
+                    is_container: true,
+                },
+            );
+            debug!(key = "/", "store::new seeded root container");
+        }
+        store
     }
 
     /// Normalise a URL path key (always starts with `/`).
@@ -74,7 +91,12 @@ impl LdpStore {
 
     /// Store a resource.  Returns `true` if this was a create (did not exist).
     /// Auto-creates every ancestor container.
-    pub fn put(&self, path: &str, body: Vec<u8>, content_type: String) -> bool {
+    pub fn put(
+        &self,
+        path: &str,
+        body: Vec<u8>,
+        content_type: String,
+    ) -> bool {
         let k = Self::key(path);
         let is_container = k.ends_with('/');
 
@@ -117,10 +139,8 @@ impl LdpStore {
     /// Walk up the path hierarchy and ensure every intermediate container
     /// exists (mirrors CSS auto-container-creation behaviour).
     fn ensure_ancestors(&self, key: &str) {
-        // Strip trailing slash for segment splitting.
         let s = key.trim_end_matches('/');
         let mut parts: Vec<&str> = s.splitn(100, '/').collect();
-        // Drop the leaf segment.
         if parts.len() > 1 {
             parts.pop();
         }
@@ -150,7 +170,6 @@ impl LdpStore {
                     is_container: true,
                 }
             });
-            // Suppress unused-variable warning in non-debug builds.
             let _ = inserted;
         }
     }

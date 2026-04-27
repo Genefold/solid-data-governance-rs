@@ -1,7 +1,7 @@
 //! Axum request handlers implementing a minimal LDP server.
 //!
 //! Every handler takes `State<Arc<LdpStore>>` plus an optional `Path<String>`
-//! for the wildcard segment. Root (`/`) requests have no path extractor.
+//! for the wildcard segment.  Root (`/`) requests have no path extractor.
 //!
 //! Covers all cases required by the five integration-test suites:
 //!   health, resource-crud, containers, content-negotiation, error-responses.
@@ -11,14 +11,15 @@
 //! Every handler emits:
 //!   `info!`  — one summary line: method, resolved key, response status
 //!   `debug!` — internal decisions (store hit/miss, content-type, body size,
-//!               create-vs-overwrite, child slug, ancestor containers)
+//!               create-vs-overwrite, child slug, ancestor containers,
+//!               Accept negotiation outcome)
 
 use axum::{
     body::Body,
     extract::{Path, State},
     http::{
-        HeaderValue, Request, StatusCode,
         header::{ALLOW, CONTENT_TYPE, LOCATION},
+        HeaderValue, Request, StatusCode,
     },
     response::{IntoResponse, Response},
 };
@@ -31,7 +32,6 @@ use crate::store::LdpStore;
 // ── helpers ───────────────────────────────────────────────────────────────
 
 /// Resolve the request path to a store key.
-/// `wildcard` is `Some(seg)` for `/*path` matches, `None` for `/`.
 fn resolve_path(wildcard: Option<&str>) -> String {
     match wildcard {
         None | Some("") => "/".to_owned(),
@@ -56,6 +56,86 @@ fn not_found(path: &str) -> Response {
         .into_response()
 }
 
+/// Build a 406 response when the stored Content-Type cannot satisfy Accept.
+fn not_acceptable(key: &str, accept: &str, stored_ct: &str) -> Response {
+    debug!(
+        key = %key,
+        accept = %accept,
+        stored_content_type = %stored_ct,
+        "content negotiation failed → 406"
+    );
+    (
+        StatusCode::NOT_ACCEPTABLE,
+        [(CONTENT_TYPE, "text/plain; charset=utf-8")],
+        format!(
+            "406 Not Acceptable: cannot serve '{stored_ct}' as '{accept}'"
+        ),
+    )
+        .into_response()
+}
+
+/// Returns `true` when the stored `content_type` satisfies the `accept` header.
+///
+/// Rules (simplified — no quality values, no subtype wildcards beyond `*/*`):
+/// - Accept absent or `*/*` → always satisfied.
+/// - Each comma-separated token is matched as a prefix against `content_type`
+///   (so `text/*` matches `text/turtle`, `text/plain`, etc.).
+/// - If any token matches, satisfied.
+fn accept_satisfied(accept_header: &str, content_type: &str) -> bool {
+    // Strip parameters from stored content-type for comparison.
+    let ct_base = content_type
+        .split(';')
+        .next()
+        .unwrap_or(content_type)
+        .trim();
+
+    for token in accept_header.split(',') {
+        let token = token
+            .split(';') // strip quality params like ;q=0.9
+            .next()
+            .unwrap_or(token)
+            .trim();
+
+        if token == "*/*" || token.is_empty() {
+            debug!(
+                accept_token = %token,
+                "accept_satisfied: wildcard or empty token → satisfied"
+            );
+            return true;
+        }
+
+        // Subtype wildcard: `text/*`
+        if let Some(major) = token.strip_suffix("/*") {
+            if ct_base.starts_with(&format!("{major}/")) {
+                debug!(
+                    accept_token = %token,
+                    content_type = %ct_base,
+                    "accept_satisfied: subtype wildcard match"
+                );
+                return true;
+            }
+            continue;
+        }
+
+        // Exact match.
+        if ct_base == token {
+            debug!(
+                accept_token = %token,
+                content_type = %ct_base,
+                "accept_satisfied: exact match"
+            );
+            return true;
+        }
+    }
+
+    debug!(
+        accept = %accept_header,
+        content_type = %ct_base,
+        "accept_satisfied: no token matched → not satisfied"
+    );
+    false
+}
+
 /// Build the `Link` header value for an LDP Container.
 fn container_link() -> HeaderValue {
     HeaderValue::from_static(
@@ -66,7 +146,9 @@ fn container_link() -> HeaderValue {
 
 /// Build the `Link` header value for an LDP Resource (document).
 fn resource_link() -> HeaderValue {
-    HeaderValue::from_static("<http://www.w3.org/ns/ldp#Resource>; rel=\"type\"")
+    HeaderValue::from_static(
+        "<http://www.w3.org/ns/ldp#Resource>; rel=\"type\"",
+    )
 }
 
 // ── GET ───────────────────────────────────────────────────────────────────
@@ -74,9 +156,22 @@ fn resource_link() -> HeaderValue {
 pub async fn handle_get(
     State(store): State<Arc<LdpStore>>,
     path: Option<Path<String>>,
+    req: Request<Body>,
 ) -> Response {
     let key = resolve_path(path.as_deref().map(|p| p.as_str()));
     debug!(key = %key, "GET handler entered");
+
+    let accept = req
+        .headers()
+        .get(axum::http::header::ACCEPT)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
+
+    if let Some(ref a) = accept {
+        debug!(key = %key, accept = %a, "GET: Accept header present");
+    } else {
+        debug!(key = %key, "GET: no Accept header");
+    }
 
     match store.get(&key) {
         None => {
@@ -92,17 +187,31 @@ pub async fn handle_get(
                 "store hit"
             );
 
+            // Content negotiation: if Accept is present and the stored
+            // Content-Type cannot satisfy it, return 406.
+            if let Some(ref a) = accept {
+                if !accept_satisfied(a, &entry.content_type) {
+                    info!(
+                        method = "GET",
+                        key = %key,
+                        accept = %a,
+                        stored_content_type = %entry.content_type,
+                        status = 406,
+                        "request complete"
+                    );
+                    return not_acceptable(&key, a, &entry.content_type);
+                }
+            }
+
             let mut resp = Response::builder()
                 .status(StatusCode::OK)
                 .header(CONTENT_TYPE, &entry.content_type);
-
             if entry.is_container {
                 debug!(key = %key, "attaching ldp:Container Link header");
                 resp = resp.header("Link", container_link());
             } else {
                 resp = resp.header("Link", resource_link());
             }
-
             info!(
                 method = "GET",
                 key = %key,
@@ -110,11 +219,11 @@ pub async fn handle_get(
                 content_type = %entry.content_type,
                 "request complete"
             );
-
-            resp.body(Body::from(entry.body)).unwrap_or_else(|e| {
-                info!(method = "GET", key = %key, error = %e, "response build failed");
-                StatusCode::INTERNAL_SERVER_ERROR.into_response()
-            })
+            resp.body(Body::from(entry.body))
+                .unwrap_or_else(|e| {
+                    info!(method = "GET", key = %key, error = %e, "response build failed");
+                    StatusCode::INTERNAL_SERVER_ERROR.into_response()
+                })
         }
     }
 }
@@ -124,9 +233,16 @@ pub async fn handle_get(
 pub async fn handle_head(
     State(store): State<Arc<LdpStore>>,
     path: Option<Path<String>>,
+    req: Request<Body>,
 ) -> Response {
     let key = resolve_path(path.as_deref().map(|p| p.as_str()));
     debug!(key = %key, "HEAD handler entered");
+
+    let accept = req
+        .headers()
+        .get(axum::http::header::ACCEPT)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
 
     match store.get(&key) {
         None => {
@@ -141,20 +257,33 @@ pub async fn handle_head(
                 "store hit (no body returned for HEAD)"
             );
 
+            // Apply the same Accept negotiation as GET.
+            if let Some(ref a) = accept {
+                if !accept_satisfied(a, &entry.content_type) {
+                    info!(
+                        method = "HEAD",
+                        key = %key,
+                        accept = %a,
+                        stored_content_type = %entry.content_type,
+                        status = 406,
+                        "request complete"
+                    );
+                    return not_acceptable(&key, a, &entry.content_type);
+                }
+            }
+
             let mut resp = Response::builder()
                 .status(StatusCode::OK)
                 .header(CONTENT_TYPE, &entry.content_type);
-
             if entry.is_container {
                 resp = resp.header("Link", container_link());
             }
-
             info!(method = "HEAD", key = %key, status = 200, "request complete");
-
-            resp.body(Body::empty()).unwrap_or_else(|e| {
-                info!(method = "HEAD", key = %key, error = %e, "response build failed");
-                StatusCode::INTERNAL_SERVER_ERROR.into_response()
-            })
+            resp.body(Body::empty())
+                .unwrap_or_else(|e| {
+                    info!(method = "HEAD", key = %key, error = %e, "response build failed");
+                    StatusCode::INTERNAL_SERVER_ERROR.into_response()
+                })
         }
     }
 }
@@ -214,10 +343,12 @@ pub async fn handle_put(
         "request complete"
     );
 
-    builder.body(Body::empty()).unwrap_or_else(|e| {
-        info!(method = "PUT", key = %key, error = %e, "response build failed");
-        StatusCode::INTERNAL_SERVER_ERROR.into_response()
-    })
+    builder
+        .body(Body::empty())
+        .unwrap_or_else(|e| {
+            info!(method = "PUT", key = %key, error = %e, "response build failed");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        })
 }
 
 // ── POST ──────────────────────────────────────────────────────────────────
@@ -244,11 +375,7 @@ pub async fn handle_post(
 
     let body_bytes = match axum::body::to_bytes(req.into_body(), usize::MAX).await {
         Ok(b) => {
-            debug!(
-                container_key = %container_key,
-                body_bytes = b.len(),
-                "body read successfully"
-            );
+            debug!(container_key = %container_key, body_bytes = b.len(), "body read successfully");
             b.to_vec()
         }
         Err(e) => {
@@ -350,7 +477,6 @@ pub async fn handle_patch(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("<none>")
         .to_owned();
-
     debug!(
         key = %key,
         patch_content_type = %patch_ct,
@@ -363,7 +489,6 @@ pub async fn handle_patch(
         status = 415,
         "unsupported patch Content-Type → 415"
     );
-
     (
         StatusCode::UNSUPPORTED_MEDIA_TYPE,
         [(CONTENT_TYPE, "text/plain; charset=utf-8")],
