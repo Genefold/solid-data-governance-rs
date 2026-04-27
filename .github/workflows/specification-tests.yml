@@ -58,28 +58,28 @@ jobs:
           # so CTH can read the issuer URI from the card as a fallback.
 
           cat > /tmp/alice-card.ttl <<'TTL'
-@prefix foaf: <http://xmlns.com/foaf/0.1/> .
-@prefix solid: <http://www.w3.org/ns/solid/terms#> .
-@prefix pim: <http://www.w3.org/ns/pim/space#> .
+          @prefix foaf: <http://xmlns.com/foaf/0.1/> .
+          @prefix solid: <http://www.w3.org/ns/solid/terms#> .
+          @prefix pim: <http://www.w3.org/ns/pim/space#> .
 
-<http://127.0.0.1:3000/alice/profile/card#me>
-    a foaf:Person ;
-    foaf:name "Alice" ;
-    solid:oidcIssuer <http://127.0.0.1:3000/> ;
-    pim:storage <http://127.0.0.1:3000/alice/> .
-TTL
+          <http://127.0.0.1:3000/alice/profile/card#me>
+              a foaf:Person ;
+              foaf:name "Alice" ;
+              solid:oidcIssuer <http://127.0.0.1:3000/> ;
+              pim:storage <http://127.0.0.1:3000/alice/> .
+          TTL
 
-          cat > /tmp/bob-card.ttl <<'TTL'
-@prefix foaf: <http://xmlns.com/foaf/0.1/> .
-@prefix solid: <http://www.w3.org/ns/solid/terms#> .
-@prefix pim: <http://www.w3.org/ns/pim/space#> .
+                    cat > /tmp/bob-card.ttl <<'TTL'
+          @prefix foaf: <http://xmlns.com/foaf/0.1/> .
+          @prefix solid: <http://www.w3.org/ns/solid/terms#> .
+          @prefix pim: <http://www.w3.org/ns/pim/space#> .
 
-<http://127.0.0.1:3000/bob/profile/card#me>
-    a foaf:Person ;
-    foaf:name "Bob" ;
-    solid:oidcIssuer <http://127.0.0.1:3000/> ;
-    pim:storage <http://127.0.0.1:3000/bob/> .
-TTL
+          <http://127.0.0.1:3000/bob/profile/card#me>
+              a foaf:Person ;
+              foaf:name "Bob" ;
+              solid:oidcIssuer <http://127.0.0.1:3000/> ;
+              pim:storage <http://127.0.0.1:3000/bob/> .
+          TTL
 
           for USER in alice bob; do
             echo "--- seeding ${USER} ---"
@@ -138,32 +138,32 @@ TTL
         run: |
           mkdir -p config
           cat > config/application.yaml <<'YAML'
-subjects: /app/config/test-subjects.ttl
-sources:
-  - https://solidproject.org/TR/protocol
-  - https://github.com/solid-contrib/specification-tests/blob/main/protocol/solid-protocol-test-manifest.ttl
-  - https://github.com/solid-contrib/specification-tests/blob/main/protocol/requirement-comments.ttl
-mappings:
-  - prefix: https://github.com/solid-contrib/specification-tests/blob/main
-    path: /data
-YAML
+          subjects: /app/config/test-subjects.ttl
+          sources:
+            - https://solidproject.org/TR/protocol
+            - https://github.com/solid-contrib/specification-tests/blob/main/protocol/solid-protocol-test-manifest.ttl
+            - https://github.com/solid-contrib/specification-tests/blob/main/protocol/requirement-comments.ttl
+          mappings:
+            - prefix: https://github.com/solid-contrib/specification-tests/blob/main
+              path: /data
+          YAML
 
       - name: Write config/test-subjects.ttl
         shell: bash
         run: |
           cat > config/test-subjects.ttl <<'TTL'
-@prefix solid-test: <https://github.com/solid/conformance-test-harness/vocab#> .
-@prefix earl: <http://www.w3.org/ns/earl#> .
-@prefix doap: <http://usefulinc.com/ns/doap#> .
+          @prefix solid-test: <https://github.com/solid/conformance-test-harness/vocab#> .
+          @prefix earl: <http://www.w3.org/ns/earl#> .
+          @prefix doap: <http://usefulinc.com/ns/doap#> .
 
-<https://github.com/tuned-org-uk/solid-community-rs#server>
-    a earl:Software, earl:TestSubject ;
-    doap:name "solid-community-rs" ;
-    doap:programming-language "Rust" ;
-    doap:homepage <https://github.com/tuned-org-uk/solid-community-rs> ;
-    solid-test:skip "acp wac authentication" ;
-    solid-test:serverRoot <http://127.0.0.1:3000/> .
-TTL
+          <https://github.com/tuned-org-uk/solid-community-rs#server>
+              a earl:Software, earl:TestSubject ;
+              doap:name "solid-community-rs" ;
+              doap:programming-language "Rust" ;
+              doap:homepage <https://github.com/tuned-org-uk/solid-community-rs> ;
+              solid-test:skip "acp wac authentication" ;
+              solid-test:serverRoot <http://127.0.0.1:3000/> .
+          TTL
 
       - name: Write CTH env file
         shell: bash
@@ -173,19 +173,19 @@ TTL
           # inside AuthManager.authenticate() — without it uri is null -> NPE.
           # TEST_CONTAINER is alice's absolute test container URL.
           cat > cth.env <<'ENV'
-SOLID_IDENTITY_PROVIDER=http://127.0.0.1:3000/
-RESOURCE_SERVER_ROOT=http://127.0.0.1:3000
-TEST_CONTAINER=http://127.0.0.1:3000/alice/test/
-USERS_ALICE_WEBID=http://127.0.0.1:3000/alice/profile/card#me
-USERS_ALICE_USERNAME=alice
-USERS_ALICE_PASSWORD=unused
-USERS_BOB_WEBID=http://127.0.0.1:3000/bob/profile/card#me
-USERS_BOB_USERNAME=bob
-USERS_BOB_PASSWORD=unused
-ORIGIN=http://example.org
-CTH_TIMEOUT=10000
-quarkus.log.category."org.solid.testharness.http.AuthManager".level=DEBUG
-ENV
+          SOLID_IDENTITY_PROVIDER=http://127.0.0.1:3000/
+          RESOURCE_SERVER_ROOT=http://127.0.0.1:3000
+          TEST_CONTAINER=http://127.0.0.1:3000/alice/test/
+          USERS_ALICE_WEBID=http://127.0.0.1:3000/alice/profile/card#me
+          USERS_ALICE_USERNAME=alice
+          USERS_ALICE_PASSWORD=unused
+          USERS_BOB_WEBID=http://127.0.0.1:3000/bob/profile/card#me
+          USERS_BOB_USERNAME=bob
+          USERS_BOB_PASSWORD=unused
+          ORIGIN=http://example.org
+          CTH_TIMEOUT=10000
+          quarkus.log.category."org.solid.testharness.http.AuthManager".level=DEBUG
+          ENV
 
       - name: Show generated config (debug)
         shell: bash
