@@ -8,7 +8,7 @@
 #
 # Mirrors the approach of:
 #   https://github.com/solid-contrib/specification-tests/blob/main/run.sh
-# but replaces `docker` with `podman` and removes the CSS Docker setup
+# but replaces `docker` with `podman` and skips the CSS Docker setup
 # (your server is already running).
 #
 # Prerequisites: podman, curl, git
@@ -17,9 +17,10 @@
 #   ./run_local.sh [OPTIONS]
 #
 # Options:
-#   -u <url>    Base URL of your server  (default: http://host.containers.internal:3000/)
+#   -p <port>   Port your server listens on  (default: 3000)
 #   -d <dir>    Path to an existing specification-tests checkout
-#                 (default: auto-cloned into ./specification-tests/)
+#               (default: auto-cloned into ./specification-tests/)
+#   -e <file>   Env file for CTH  (default: ./solid-community-rs.env)
 #   -t <file>   Tolerable-failures file
 #   -h          Show this help
 #
@@ -29,11 +30,9 @@
 set -euo pipefail
 
 # ── defaults ───────────────────────────────────────────────────────────────
-# host.containers.internal resolves to the host from inside a Podman container.
-# If your server binds to 127.0.0.1 you may need --network=host instead;
-# see the note at the bottom of this file.
-BASE_URL="http://host.containers.internal:3000/"
+PORT="3000"
 SPEC_DIR=""
+ENV_FILE=""
 TOLERABLE_FILE=""
 
 CTH_IMAGE="solidproject/conformance-test-harness"
@@ -41,31 +40,37 @@ CWD="$(pwd)"
 
 log() { echo "==> $*"; }
 
-usage() {
-  sed -n '/^# Usage/,/^# Quick/p' "$0" | sed 's/^# \?//'
-  exit 0
-}
-
-while getopts ":u:d:t:h" opt; do
+while getopts ":p:d:e:t:h" opt; do
   case $opt in
-    u) BASE_URL="${OPTARG%/}/" ;;
+    p) PORT="$OPTARG" ;;
     d) SPEC_DIR="$(cd "$OPTARG" && pwd)" ;;
+    e) ENV_FILE="$(cd "$(dirname "$OPTARG")" && pwd)/$(basename "$OPTARG")" ;;
     t) TOLERABLE_FILE="$(cd "$(dirname "$OPTARG")" && pwd)/$(basename "$OPTARG")" ;;
-    h) usage ;;
+    h) sed -n '/^# Usage/,/^# Quick/p' "$0" | sed 's/^# \?//'; exit 0 ;;
     :) echo "ERROR: -$OPTARG requires an argument"; exit 1 ;;
    \?) echo "ERROR: unknown option -$OPTARG"; exit 1 ;;
   esac
 done
 shift $((OPTIND - 1))
 
+# The URL the *container* uses to reach the host server.
+# host.containers.internal is the host gateway in Podman 4+ (rootless).
+HOST_URL="http://host.containers.internal:${PORT}/"
+# The URL used from *this machine* for the readiness probe.
+PROBE_URL="http://localhost:${PORT}/"
+
+# Resolve env file
+if [[ -z "$ENV_FILE" ]]; then
+  ENV_FILE="$CWD/solid-community-rs.env"
+fi
+
 # ── preflight ─────────────────────────────────────────────────────────────
 for cmd in podman curl git; do
   command -v "$cmd" &>/dev/null || { echo "ERROR: '$cmd' not found on PATH"; exit 1; }
 done
+[[ -f "$ENV_FILE" ]] || { echo "ERROR: env file not found: $ENV_FILE"; exit 1; }
 
 # ── server readiness probe ────────────────────────────────────────────────
-# Probe via localhost (from the host), not via host.containers.internal.
-PROBE_URL="${BASE_URL/host.containers.internal/localhost}"
 log "Probing server at $PROBE_URL ..."
 for i in $(seq 1 15); do
   curl --silent --fail --output /dev/null "$PROBE_URL" && break
@@ -88,30 +93,30 @@ if [[ -z "$SPEC_DIR" ]]; then
   fi
 fi
 
-# ── config directory ────────────────────────────────────────────────────────────
-# application.yaml is read by CTH from /app/config inside the container.
+# ── config: application.yaml + test-subjects.ttl ────────────────────────────
 CONFIG_DIR="$CWD/config"
 mkdir -p "$CONFIG_DIR"
 
+# application.yaml: CTH reads this from /app/config inside the container.
+# The mappings section rewrites GitHub blob URLs to the /data volume.
 cat > "$CONFIG_DIR/application.yaml" <<YAML
-subjects: /data/test-subjects.ttl
+subjects: /app/config/test-subjects.ttl
 sources:
   - https://solidproject.org/TR/protocol
   - https://github.com/solid-contrib/specification-tests/blob/main/protocol/solid-protocol-test-manifest.ttl
   - https://github.com/solid-contrib/specification-tests/blob/main/protocol/requirement-comments.ttl
 mappings:
-  # Rewrite GitHub blob URLs to the local checkout mounted at /data
   - prefix: https://github.com/solid-contrib/specification-tests/blob/main
     path: /data
 YAML
 
-# test-subjects.ttl declares solid-community-rs as the test subject.
-# No credentials — our server is currently unauthenticated.
+# test-subjects.ttl: declares solid-community-rs as the test subject.
+# WAC, ACP and authentication suites are skipped (not implemented yet).
 cat > "$CONFIG_DIR/test-subjects.ttl" <<TTL
 @prefix solid-test: <https://github.com/solid/conformance-test-harness/vocab#> .
-@prefix earl:  <http://www.w3.org/ns/earl#> .
-@prefix doap:  <http://usefulinc.com/ns/doap#> .
-@prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix earl: <http://www.w3.org/ns/earl#> .
+@prefix doap: <http://usefulinc.com/ns/doap#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 
 <solid-community-rs>
     a earl:Software, earl:TestSubject ;
@@ -120,60 +125,55 @@ cat > "$CONFIG_DIR/test-subjects.ttl" <<TTL
     doap:programming-language "Rust" ;
     doap:homepage <https://github.com/tuned-org-uk/solid-community-rs> ;
     solid-test:skip "acp", "wac", "authentication" ;
-    solid-test:serverRoot <${BASE_URL}> .
+    solid-test:serverRoot <${HOST_URL}> .
 TTL
 
-# ── reports directory ──────────────────────────────────────────────────────────
+# ── output dirs ────────────────────────────────────────────────────────────────
 REPORTS_DIR="$CWD/reports"
-mkdir -p "$REPORTS_DIR"
+mkdir -p "$REPORTS_DIR" "$CWD/target"
 
-# ── pull image ─────────────────────────────────────────────────────────────────
+# ── pull the CTH image ────────────────────────────────────────────────────────
 log "Pulling $CTH_IMAGE ..."
 podman pull "$CTH_IMAGE"
 
-# ── build podman args ──────────────────────────────────────────────────────────
+# ── run ───────────────────────────────────────────────────────────────────────
 PODMAN_ARGS=(
   --rm
   --interactive
-  # Run as current user so report files are owned by you, not root.
   --user "$(id -u):$(id -g)"
-  # specification-tests checkout mounted at /data (matches the mappings above).
+  # Env file: supplies users.alice.webid, users.bob.webid etc.
+  --env-file="$ENV_FILE"
+  # specification-tests checkout → /data  (matches mappings in application.yaml)
   --volume "${SPEC_DIR}:/data:ro,z"
-  # Config (application.yaml + test-subjects.ttl) mounted at /app/config.
+  # Config files → /app/config
   --volume "${CONFIG_DIR}:/app/config:ro,z"
-  # Reports output.
+  # Reports output
   --volume "${REPORTS_DIR}:/reports:z"
-  # Karate writes its own artefacts here.
+  # Karate artefacts
   --volume "${CWD}/target:/app/target:z"
+  # host.containers.internal → host gateway (Podman 4+ rootless, macOS & Linux)
+  --add-host="host.containers.internal:host-gateway"
 )
-
-# host.containers.internal is available by default in Podman 4+.
-# If your server binds only to 127.0.0.1 (not 0.0.0.0), add:
-#   --network=host
-# and change BASE_URL back to http://localhost:3000/
 
 HARNESS_ARGS=(
   --output=/reports
-  --target="${BASE_URL}"
+  --target="${HOST_URL}"
   --skip-teardown
 )
 
 if [[ -n "$TOLERABLE_FILE" ]]; then
-  mkdir -p "$CWD/target"
   cp "$TOLERABLE_FILE" "$CWD/target/tolerable-failures.txt"
   HARNESS_ARGS+=("--tolerable-failures=/app/target/tolerable-failures.txt")
 fi
 
-mkdir -p "$CWD/target"
-
-# ── run ───────────────────────────────────────────────────────────────────────
 log "Launching CTH container ..."
-log "  image:   $CTH_IMAGE"
-log "  server:  $BASE_URL"
-log "  tests:   $SPEC_DIR"
-log "  reports: $REPORTS_DIR"
+log "  image:      $CTH_IMAGE"
+log "  server:     $HOST_URL  (probe: $PROBE_URL)"
+log "  env file:   $ENV_FILE"
+log "  tests:      $SPEC_DIR"
+log "  reports:    $REPORTS_DIR"
 echo ""
-echo "Running: podman run ${PODMAN_ARGS[*]} $CTH_IMAGE ${HARNESS_ARGS[*]}"
+echo "podman run ${PODMAN_ARGS[*]} $CTH_IMAGE ${HARNESS_ARGS[*]}"
 echo ""
 
 set +e
@@ -182,21 +182,25 @@ exit_code=$?
 set -e
 
 echo ""
-if [[ $exit_code -eq 0 ]]; then
-  log "All tests passed."
-else
-  log "Tests finished with failures (exit $exit_code) — see: $REPORTS_DIR"
-fi
+[[ $exit_code -eq 0 ]] \
+  && log "All tests passed." \
+  || log "Tests finished with failures (exit $exit_code) — see: $REPORTS_DIR"
 
 exit $exit_code
 # ---------------------------------------------------------------------------
-# NOTE — if the container cannot reach your server:
+# TROUBLESHOOTING
 #
-# Podman rootless uses a pasta/slirp4netns network where
-# host.containers.internal resolves to the host IP.
-# If that doesn’t work on your distro try:
+# "connection refused" from inside the container:
+#   Your server may only bind to 127.0.0.1.  Try adding --network=host to
+#   PODMAN_ARGS and changing PORT to use http://localhost:${PORT}/.
 #
-#   ./run_local.sh --network=host -u http://localhost:3000/
+# SELinux denials on volume mounts:
+#   The :z flag re-labels volumes for shared access.  If you see permission
+#   errors try replacing :z with :Z (private label) or run:
+#     chcon -Rt svirt_sandbox_file_t <directory>
 #
-# or add “--add-host=host.containers.internal:host-gateway” to PODMAN_ARGS.
+# Platform warning (linux/amd64 on arm64):
+#   Expected on Apple Silicon — Rosetta/QEMU emulation handles this.
+#   Add --platform=linux/arm64 to PODMAN_ARGS if a native arm64 image
+#   becomes available.
 # ---------------------------------------------------------------------------
