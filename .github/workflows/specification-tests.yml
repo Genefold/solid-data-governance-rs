@@ -30,13 +30,6 @@ jobs:
       - name: Build server (release)
         run: cargo build --release -p cli
 
-      - name: Resolve host IP (for container → host networking)
-        shell: bash
-        run: |
-          HOST_IP=$(ip -4 route show default | awk '{print $3}' | head -1)
-          echo "HOST_IP=$HOST_IP" >> "$GITHUB_ENV"
-          echo "Server will be reachable inside container at: $HOST_IP:3000"
-
       - name: Start solid-community-rs
         shell: bash
         run: |
@@ -47,11 +40,11 @@ jobs:
         shell: bash
         run: |
           for i in $(seq 1 30); do
-            curl --silent --fail --output /dev/null http://localhost:3000/ && break
+            curl --silent --fail --output /dev/null http://127.0.0.1:3000/ && break
             echo "Waiting... ($i)"
             sleep 1
           done
-          curl --silent --fail --output /dev/null http://localhost:3000/ \
+          curl --silent --fail --output /dev/null http://127.0.0.1:3000/ \
             || (echo "Server never became ready" && exit 1)
 
       - name: Clone specification-tests
@@ -79,7 +72,7 @@ jobs:
       - name: Write config/test-subjects.ttl
         shell: bash
         run: |
-          cat > config/test-subjects.ttl <<TTL
+          cat > config/test-subjects.ttl <<'TTL'
           @prefix solid-test: <https://github.com/solid/conformance-test-harness/vocab#> .
           @prefix earl: <http://www.w3.org/ns/earl#> .
           @prefix doap: <http://usefulinc.com/ns/doap#> .
@@ -90,18 +83,18 @@ jobs:
               doap:programming-language "Rust" ;
               doap:homepage <https://github.com/tuned-org-uk/solid-community-rs> ;
               solid-test:skip "acp wac authentication" ;
-              solid-test:serverRoot <http://${HOST_IP}:3000/> .
+              solid-test:serverRoot <http://127.0.0.1:3000/> .
           TTL
 
       - name: Write CTH env file
         shell: bash
         run: |
-          cat > cth.env <<ENV
-          SERVER_ROOT=http://${HOST_IP}:3000/
-          users.alice.webid=http://${HOST_IP}:3000/alice/profile/card#me
+          cat > cth.env <<'ENV'
+          SERVER_ROOT=http://127.0.0.1:3000/
+          users.alice.webid=http://127.0.0.1:3000/alice/profile/card#me
           users.alice.username=alice
           users.alice.password=
-          users.bob.webid=http://${HOST_IP}:3000/bob/profile/card#me
+          users.bob.webid=http://127.0.0.1:3000/bob/profile/card#me
           users.bob.username=bob
           users.bob.password=
           ORIGIN=http://example.org
@@ -115,6 +108,8 @@ jobs:
           cat config/test-subjects.ttl
           echo "=== cth.env ==="
           cat cth.env
+          echo "=== server reachable from host ==="
+          curl -v http://127.0.0.1:3000/ 2>&1 | head -20
 
       - name: Create output directories
         shell: bash
