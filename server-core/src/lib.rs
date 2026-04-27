@@ -4,8 +4,10 @@
 
 pub mod app;
 pub mod handler;
+pub mod ldp_handlers;
 pub mod middleware;
 pub mod pipeline;
 pub mod routing;
+pub mod store;
 
 pub use app::App;

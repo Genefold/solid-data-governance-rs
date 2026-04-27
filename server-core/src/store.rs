@@ -3,11 +3,18 @@
 //! A simple `Arc<RwLock<HashMap>>` that is shared across all request handlers.
 //! Suitable for integration-test runs; swap in `solid-storage` backends for
 //! production persistence.
+//!
+//! ## Logging
+//!
+//! Every mutation emits a `debug!` statement so that test runs clearly show
+//! which keys were created, overwritten, or deleted, and which ancestor
+//! containers were auto-created.
 
 use std::{
     collections::HashMap,
     sync::{Arc, RwLock},
 };
+use tracing::debug;
 
 /// One stored resource entry.
 #[derive(Clone, Debug)]
@@ -43,34 +50,54 @@ impl LdpStore {
     /// Retrieve a resource.
     pub fn get(&self, path: &str) -> Option<Entry> {
         let k = Self::key(path);
-        self.inner.read().unwrap().get(&k).cloned()
+        let result = self.inner.read().unwrap().get(&k).cloned();
+        match &result {
+            Some(e) => debug!(
+                key = %k,
+                content_type = %e.content_type,
+                body_bytes = e.body.len(),
+                is_container = e.is_container,
+                "store::get hit"
+            ),
+            None => debug!(key = %k, "store::get miss"),
+        }
+        result
     }
 
     /// Check existence without cloning the body.
     pub fn exists(&self, path: &str) -> bool {
         let k = Self::key(path);
-        self.inner.read().unwrap().contains_key(&k)
+        let found = self.inner.read().unwrap().contains_key(&k);
+        debug!(key = %k, found = found, "store::exists");
+        found
     }
 
     /// Store a resource.  Returns `true` if this was a create (did not exist).
     /// Auto-creates every ancestor container.
-    pub fn put(
-        &self,
-        path: &str,
-        body: Vec<u8>,
-        content_type: String,
-    ) -> bool {
+    pub fn put(&self, path: &str, body: Vec<u8>, content_type: String) -> bool {
         let k = Self::key(path);
         let is_container = k.ends_with('/');
 
-        // Auto-create ancestor containers.
+        // Auto-create ancestor containers (logged inside ensure_ancestors).
         self.ensure_ancestors(&k);
 
         let mut map = self.inner.write().unwrap();
         let created = !map.contains_key(&k);
+        debug!(
+            key = %k,
+            content_type = %content_type,
+            body_bytes = body.len(),
+            is_container = is_container,
+            created = created,
+            "store::put"
+        );
         map.insert(
             k,
-            Entry { body, content_type, is_container },
+            Entry {
+                body,
+                content_type,
+                is_container,
+            },
         );
         created
     }
@@ -78,7 +105,9 @@ impl LdpStore {
     /// Delete a resource.  Returns `true` if the resource existed.
     pub fn delete(&self, path: &str) -> bool {
         let k = Self::key(path);
-        self.inner.write().unwrap().remove(&k).is_some()
+        let removed = self.inner.write().unwrap().remove(&k).is_some();
+        debug!(key = %k, removed = removed, "store::delete");
+        removed
     }
 
     pub fn is_container(&self, path: &str) -> bool {
@@ -108,17 +137,21 @@ impl LdpStore {
                 current.push_str(part);
                 current.push('/');
             }
-            // Only the root `/` and proper container paths.
             let k = if current == "//" {
                 "/".to_owned()
             } else {
                 current.clone()
             };
-            map.entry(k).or_insert_with(|| Entry {
-                body: Vec::new(),
-                content_type: "text/turtle".to_owned(),
-                is_container: true,
+            let inserted = map.entry(k.clone()).or_insert_with(|| {
+                debug!(ancestor = %k, "store::ensure_ancestors auto-creating container");
+                Entry {
+                    body: Vec::new(),
+                    content_type: "text/turtle".to_owned(),
+                    is_container: true,
+                }
             });
+            // Suppress unused-variable warning in non-debug builds.
+            let _ = inserted;
         }
     }
 }
