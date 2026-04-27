@@ -28,11 +28,35 @@ jobs:
       - name: Cache Rust build artefacts
         uses: Swatinem/rust-cache@v2
 
-      # ── 3. Build the server ────────────────────────────────────────────────
+      # ── 3. Install container runtime ──────────────────────────────────────
+      # ubuntu-latest: podman is available in the apt repos but may be outdated;
+      #   use the official Kubic OBS repo for a current 4.x build.
+      # macos-latest:  podman is not pre-installed; brew installs it plus qemu.
+      #   We then init + start a podman machine (lightweight Linux VM) so
+      #   `podman run` works exactly like on Linux.
+      # windows-latest: Docker Desktop is pre-installed — no action needed.
+      - name: Install Podman (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y podman
+
+      - name: Install Podman (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install podman
+          # Initialise a rootless podman machine and start it.
+          # --rootful is NOT used so volume mounts work without extra config.
+          podman machine init --cpus 2 --memory 2048 --disk-size 20
+          podman machine start
+          # Verify the socket is up before continuing.
+          podman info
+
+      # ── 4. Build the server ────────────────────────────────────────────────
       - name: Build server (release)
         run: cargo build --release -p cli
 
-      # ── 4. Start the server in the background ─────────────────────────────
+      # ── 5. Start the server in the background ─────────────────────────────
       - name: Start solid-community-rs (Linux / macOS)
         if: runner.os != 'Windows'
         run: |
@@ -48,7 +72,7 @@ jobs:
                     -PassThru -NoNewWindow
           "SERVER_PID=$($proc.Id)" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-      # ── 5. Wait for the server to be ready ────────────────────────────────
+      # ── 6. Wait for the server to be ready ────────────────────────────────
       - name: Wait for server (Linux / macOS)
         if: runner.os != 'Windows'
         run: |
@@ -73,20 +97,17 @@ jobs:
           }
           if (-not $ready) { Write-Error "Server never became ready"; exit 1 }
 
-      # ── 6. Clone specification-tests ──────────────────────────────────────
+      # ── 7. Clone specification-tests ──────────────────────────────────────
       - name: Clone specification-tests
+        shell: bash
         run: |
           git clone --depth=1 \
             https://github.com/solid-contrib/specification-tests.git \
             specification-tests
-        shell: bash
 
-      # ── 7. Write CTH config files ─────────────────────────────────────────
-      #
-      # On Linux/macOS the CTH container reaches the host via
-      # host.containers.internal (Podman 4+) or host-gateway.
-      # On Windows we use host.docker.internal which Docker Desktop
-      # and Podman Desktop both honour.
+      # ── 8. Write CTH config files ─────────────────────────────────────────
+      # Linux/macOS: container reaches host via host.containers.internal
+      # Windows:     Docker Desktop exposes host via host.docker.internal
       - name: Write config/application.yaml
         shell: bash
         run: |
@@ -140,7 +161,7 @@ jobs:
               solid-test:serverRoot <$hostUrl> .
           "@ | Set-Content config/test-subjects.ttl
 
-      # ── 8. Write the CTH env file ─────────────────────────────────────────
+      # ── 9. Write CTH env file ─────────────────────────────────────────────
       - name: Write CTH env file (Linux / macOS)
         if: runner.os != 'Windows'
         shell: bash
@@ -173,18 +194,14 @@ jobs:
           CTH_TIMEOUT=10000
           "@ | Set-Content cth.env
 
-      # ── 9. Create output directories ──────────────────────────────────────
+      # ── 10. Create output directories ─────────────────────────────────────
       - name: Create output directories
         shell: bash
         run: mkdir -p reports target
 
-      # ── 10. Pull CTH image ────────────────────────────────────────────────
-      - name: Pull CTH image (Linux)
-        if: runner.os == 'Linux'
-        run: podman pull solidproject/conformance-test-harness
-
-      - name: Pull CTH image (macOS)
-        if: runner.os == 'macOS'
+      # ── 11. Pull CTH image ────────────────────────────────────────────────
+      - name: Pull CTH image (Linux / macOS)
+        if: runner.os != 'Windows'
         run: podman pull solidproject/conformance-test-harness
 
       - name: Pull CTH image (Windows)
@@ -192,7 +209,7 @@ jobs:
         shell: pwsh
         run: docker pull solidproject/conformance-test-harness
 
-      # ── 11. Run the CTH container ─────────────────────────────────────────
+      # ── 12. Run the CTH container ─────────────────────────────────────────
       - name: Run CTH (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -241,7 +258,7 @@ jobs:
             --target=http://host.docker.internal:3000/ `
             --skip-teardown
 
-      # ── 12. Upload reports ────────────────────────────────────────────────
+      # ── 13. Upload reports ────────────────────────────────────────────────
       - name: Upload CTH reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -250,7 +267,7 @@ jobs:
           path: reports/
           if-no-files-found: warn
 
-      # ── 13. Stop the server ───────────────────────────────────────────────
+      # ── 14. Stop the server ───────────────────────────────────────────────
       - name: Stop server (Linux / macOS)
         if: always() && runner.os != 'Windows'
         shell: bash
