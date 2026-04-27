@@ -53,33 +53,59 @@ jobs:
       - name: Seed WebID profile documents
         shell: bash
         run: |
-          # CTH requires alice and bob WebID documents to exist before it starts.
-          # We PUT minimal Turtle profile cards so the server returns 200 + RDF
-          # when CTH fetches them during REGISTER CLIENTS.
+          # Write Turtle cards to temp files to avoid shell quoting issues,
+          # then PUT them onto the server via curl --data-binary @file.
+
+          cat > /tmp/alice-card.ttl <<'TTL'
+          @prefix foaf: <http://xmlns.com/foaf/0.1/> .
+          <http://127.0.0.1:3000/alice/profile/card#me>
+              a foaf:Person ;
+              foaf:name "Alice" .
+          TTL
+
+          cat > /tmp/bob-card.ttl <<'TTL'
+          @prefix foaf: <http://xmlns.com/foaf/0.1/> .
+          <http://127.0.0.1:3000/bob/profile/card#me>
+              a foaf:Person ;
+              foaf:name "Bob" .
+          TTL
 
           for USER in alice bob; do
-            # Ensure parent containers exist (POST to create if needed)
-            curl --silent --output /dev/null --request POST \
+            echo "--- seeding ${USER} ---"
+
+            # Create parent containers (ignore errors if they already exist)
+            curl --silent --output /dev/null \
+              --request POST \
+              --header 'Content-Type: text/turtle' \
+              --header "Slug: ${USER}" \
+              http://127.0.0.1:3000/ || true
+
+            curl --silent --output /dev/null \
+              --request POST \
               --header 'Content-Type: text/turtle' \
               --header 'Slug: profile' \
-              --data '' \
               http://127.0.0.1:3000/${USER}/ || true
 
-            # PUT the WebID card
-            curl --silent --show-error --fail \
+            # PUT the WebID card from the temp file
+            HTTP_STATUS=$(curl --silent --output /dev/null --write-out "%{http_code}" \
               --request PUT \
               --header 'Content-Type: text/turtle' \
-              --data "@prefix foaf: <http://xmlns.com/foaf/0.1/> .
-          <http://127.0.0.1:3000/${USER}/profile/card#me>
-              a foaf:Person ;
-              foaf:name \"${USER^}\" ." \
-              http://127.0.0.1:3000/${USER}/profile/card
-            echo "Seeded ${USER} WebID: HTTP $?"
+              --data-binary @/tmp/${USER}-card.ttl \
+              http://127.0.0.1:3000/${USER}/profile/card)
+            echo "PUT ${USER}/profile/card -> HTTP ${HTTP_STATUS}"
+
+            if [[ "$HTTP_STATUS" != "200" && "$HTTP_STATUS" != "201" && "$HTTP_STATUS" != "204" ]]; then
+              echo "ERROR: unexpected status ${HTTP_STATUS} seeding ${USER} WebID"
+              exit 1
+            fi
           done
 
           # Verify both cards are readable
-          curl --silent --fail -I http://127.0.0.1:3000/alice/profile/card
-          curl --silent --fail -I http://127.0.0.1:3000/bob/profile/card
+          echo "--- verifying ---"
+          curl --silent --fail --header 'Accept: text/turtle' \
+            http://127.0.0.1:3000/alice/profile/card && echo "alice OK"
+          curl --silent --fail --header 'Accept: text/turtle' \
+            http://127.0.0.1:3000/bob/profile/card && echo "bob OK"
 
       - name: Clone specification-tests
         shell: bash
@@ -142,10 +168,6 @@ jobs:
           cat config/test-subjects.ttl
           echo "=== cth.env ==="
           cat cth.env
-          echo "=== alice WebID ==="
-          curl -s http://127.0.0.1:3000/alice/profile/card
-          echo "=== bob WebID ==="
-          curl -s http://127.0.0.1:3000/bob/profile/card
 
       - name: Create output directories
         shell: bash
