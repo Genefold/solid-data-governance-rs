@@ -371,3 +371,361 @@ impl<S: ResourceStore + 'static> ResourceStore for ReadOnlyStore<S> {
         ))
     }
 }
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Tests
+// ──────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // SpyStore — records which methods were called.
+    // Rust equivalent of Jest's `jest.fn()` mock store used in every TS suite.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[derive(Clone)]
+    struct SpyStore {
+        calls: Arc<Mutex<Vec<&'static str>>>,
+        /// Configurable return value for `has_resource`.
+        has_result: bool,
+    }
+
+    impl SpyStore {
+        fn new() -> Self {
+            Self { calls: Default::default(), has_result: false }
+        }
+        fn with_has(result: bool) -> Self {
+            Self { calls: Default::default(), has_result: result }
+        }
+        fn push(&self, name: &'static str) {
+            self.calls.lock().unwrap().push(name);
+        }
+        fn recorded(&self) -> Vec<&'static str> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    fn dummy_url() -> Url {
+        Url::parse("http://test.com/resource").unwrap()
+    }
+    fn container_url() -> Url {
+        Url::parse("http://test.com/container/").unwrap()
+    }
+    fn dummy_repr(url: &Url) -> Representation {
+        Representation {
+            identifier: url.clone(),
+            body: RepresentationBody {
+                content_type: "text/plain".into(),
+                data: Bytes::from("hello"),
+            },
+            metadata: HashMap::new(),
+        }
+    }
+    fn dummy_change_map() -> ChangeMap {
+        let mut m = HashMap::new();
+        m.insert(
+            "http://test.com/resource".into(),
+            ChangeMetadata::new(ChangeMetadata::AS_UPDATE),
+        );
+        m
+    }
+
+    #[async_trait]
+    impl ResourceSet for SpyStore {
+        async fn has_resource(&self, _url: &Url) -> Result<bool, StorageError> {
+            self.push("has_resource");
+            Ok(self.has_result)
+        }
+    }
+
+    #[async_trait]
+    impl ResourceStore for SpyStore {
+        async fn get_representation(
+            &self,
+            url: &Url,
+            _prefs: &RepresentationPreferences,
+        ) -> Result<Representation, StorageError> {
+            self.push("get_representation");
+            Ok(dummy_repr(url))
+        }
+        async fn add_resource(
+            &self,
+            _container: &Url,
+            _repr: Representation,
+        ) -> Result<ChangeMap, StorageError> {
+            self.push("add_resource");
+            Ok(dummy_change_map())
+        }
+        async fn set_representation(
+            &self,
+            _url: &Url,
+            _repr: Representation,
+        ) -> Result<ChangeMap, StorageError> {
+            self.push("set_representation");
+            Ok(dummy_change_map())
+        }
+        async fn delete_resource(&self, _url: &Url) -> Result<ChangeMap, StorageError> {
+            self.push("delete_resource");
+            Ok(dummy_change_map())
+        }
+        async fn modify_resource(
+            &self,
+            _url: &Url,
+            _patch: Bytes,
+        ) -> Result<ChangeMap, StorageError> {
+            self.push("modify_resource");
+            Ok(dummy_change_map())
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // BaseResourceStore
+    // Ported from: test/unit/storage/BaseResourceStore.test.ts
+    // ─────────────────────────────────────────────────────────────────────────
+
+    mod base_resource_store {
+        use super::*;
+
+        // it('errors on getRepresentation')
+        #[tokio::test]
+        async fn errors_on_get_representation() {
+            let store = BaseResourceStore;
+            let url = dummy_url();
+            let err = store
+                .get_representation(&url, &RepresentationPreferences::default())
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(err, StorageError::NotImplemented(_)),
+                "expected NotImplemented, got {err:?}"
+            );
+        }
+
+        // it('errors on addResource')
+        #[tokio::test]
+        async fn errors_on_add_resource() {
+            let store = BaseResourceStore;
+            let url = container_url();
+            let repr = dummy_repr(&url);
+            let err = store.add_resource(&url, repr).await.unwrap_err();
+            assert!(matches!(err, StorageError::NotImplemented(_)));
+        }
+
+        // it('errors on setRepresentation')
+        #[tokio::test]
+        async fn errors_on_set_representation() {
+            let store = BaseResourceStore;
+            let url = dummy_url();
+            let repr = dummy_repr(&url);
+            let err = store.set_representation(&url, repr).await.unwrap_err();
+            assert!(matches!(err, StorageError::NotImplemented(_)));
+        }
+
+        // it('errors on deleteResource')
+        #[tokio::test]
+        async fn errors_on_delete_resource() {
+            let store = BaseResourceStore;
+            let url = dummy_url();
+            let err = store.delete_resource(&url).await.unwrap_err();
+            assert!(matches!(err, StorageError::NotImplemented(_)));
+        }
+
+        // it('errors on modifyResource')
+        #[tokio::test]
+        async fn errors_on_modify_resource() {
+            let store = BaseResourceStore;
+            let url = dummy_url();
+            let err = store
+                .modify_resource(&url, Bytes::from("patch"))
+                .await
+                .unwrap_err();
+            assert!(matches!(err, StorageError::NotImplemented(_)));
+        }
+
+        // it('errors on hasResource')
+        #[tokio::test]
+        async fn errors_on_has_resource() {
+            let store = BaseResourceStore;
+            let url = dummy_url();
+            let err = store.has_resource(&url).await.unwrap_err();
+            assert!(matches!(err, StorageError::NotImplemented(_)));
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // PassthroughStore
+    // Ported from: test/unit/storage/PassthroughStore.test.ts
+    // ─────────────────────────────────────────────────────────────────────────
+
+    mod passthrough_store {
+        use super::*;
+
+        // it('calls getRepresentation directly from the source')
+        #[tokio::test]
+        async fn delegates_get_representation() {
+            let spy = Arc::new(SpyStore::new());
+            let store = PassthroughStore::new(Arc::clone(&spy));
+            let url = dummy_url();
+            store
+                .get_representation(&url, &RepresentationPreferences::default())
+                .await
+                .unwrap();
+            assert_eq!(spy.recorded(), vec!["get_representation"]);
+        }
+
+        // it('calls addResource directly from the source')
+        #[tokio::test]
+        async fn delegates_add_resource() {
+            let spy = Arc::new(SpyStore::new());
+            let store = PassthroughStore::new(Arc::clone(&spy));
+            let url = container_url();
+            let repr = dummy_repr(&url);
+            store.add_resource(&url, repr).await.unwrap();
+            assert_eq!(spy.recorded(), vec!["add_resource"]);
+        }
+
+        // it('calls setRepresentation directly from the source')
+        #[tokio::test]
+        async fn delegates_set_representation() {
+            let spy = Arc::new(SpyStore::new());
+            let store = PassthroughStore::new(Arc::clone(&spy));
+            let url = dummy_url();
+            let repr = dummy_repr(&url);
+            store.set_representation(&url, repr).await.unwrap();
+            assert_eq!(spy.recorded(), vec!["set_representation"]);
+        }
+
+        // it('calls deleteResource directly from the source')
+        #[tokio::test]
+        async fn delegates_delete_resource() {
+            let spy = Arc::new(SpyStore::new());
+            let store = PassthroughStore::new(Arc::clone(&spy));
+            let url = dummy_url();
+            store.delete_resource(&url).await.unwrap();
+            assert_eq!(spy.recorded(), vec!["delete_resource"]);
+        }
+
+        // it('calls modifyResource directly from the source')
+        #[tokio::test]
+        async fn delegates_modify_resource() {
+            let spy = Arc::new(SpyStore::new());
+            let store = PassthroughStore::new(Arc::clone(&spy));
+            let url = dummy_url();
+            store
+                .modify_resource(&url, Bytes::from("patch"))
+                .await
+                .unwrap();
+            assert_eq!(spy.recorded(), vec!["modify_resource"]);
+        }
+
+        // it('calls hasResource directly from the source')
+        #[tokio::test]
+        async fn delegates_has_resource_true() {
+            let spy = Arc::new(SpyStore::with_has(true));
+            let store = PassthroughStore::new(Arc::clone(&spy));
+            let url = dummy_url();
+            let result = store.has_resource(&url).await.unwrap();
+            assert!(result);
+            assert_eq!(spy.recorded(), vec!["has_resource"]);
+        }
+
+        #[tokio::test]
+        async fn delegates_has_resource_false() {
+            let spy = Arc::new(SpyStore::with_has(false));
+            let store = PassthroughStore::new(Arc::clone(&spy));
+            let url = dummy_url();
+            let result = store.has_resource(&url).await.unwrap();
+            assert!(!result);
+            assert_eq!(spy.recorded(), vec!["has_resource"]);
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // ReadOnlyStore
+    // Ported from: test/unit/storage/ReadOnlyStore.test.ts
+    // ─────────────────────────────────────────────────────────────────────────
+
+    mod read_only_store {
+        use super::*;
+
+        // it('calls getRepresentation directly from the source')
+        #[tokio::test]
+        async fn delegates_get_representation() {
+            let spy = Arc::new(SpyStore::new());
+            let store = ReadOnlyStore::new(Arc::clone(&spy));
+            let url = dummy_url();
+            store
+                .get_representation(&url, &RepresentationPreferences::default())
+                .await
+                .unwrap();
+            assert_eq!(spy.recorded(), vec!["get_representation"]);
+        }
+
+        // it('calls hasResource directly from the source')
+        #[tokio::test]
+        async fn delegates_has_resource() {
+            let spy = Arc::new(SpyStore::with_has(true));
+            let store = ReadOnlyStore::new(Arc::clone(&spy));
+            let url = dummy_url();
+            let result = store.has_resource(&url).await.unwrap();
+            assert!(result);
+            assert_eq!(spy.recorded(), vec!["has_resource"]);
+        }
+
+        // it('throws an error when calling addResource')
+        #[tokio::test]
+        async fn rejects_add_resource_with_forbidden() {
+            let spy = Arc::new(SpyStore::new());
+            let store = ReadOnlyStore::new(Arc::clone(&spy));
+            let url = container_url();
+            let repr = dummy_repr(&url);
+            let err = store.add_resource(&url, repr).await.unwrap_err();
+            assert!(
+                matches!(err, StorageError::Forbidden(_)),
+                "expected Forbidden, got {err:?}"
+            );
+            // source must NOT have been called
+            assert!(spy.recorded().is_empty(), "source should not be called");
+        }
+
+        // it('throws an error when calling setRepresentation')
+        #[tokio::test]
+        async fn rejects_set_representation_with_forbidden() {
+            let spy = Arc::new(SpyStore::new());
+            let store = ReadOnlyStore::new(Arc::clone(&spy));
+            let url = dummy_url();
+            let repr = dummy_repr(&url);
+            let err = store.set_representation(&url, repr).await.unwrap_err();
+            assert!(matches!(err, StorageError::Forbidden(_)));
+            assert!(spy.recorded().is_empty());
+        }
+
+        // it('throws an error when calling deleteResource')
+        #[tokio::test]
+        async fn rejects_delete_resource_with_forbidden() {
+            let spy = Arc::new(SpyStore::new());
+            let store = ReadOnlyStore::new(Arc::clone(&spy));
+            let url = dummy_url();
+            let err = store.delete_resource(&url).await.unwrap_err();
+            assert!(matches!(err, StorageError::Forbidden(_)));
+            assert!(spy.recorded().is_empty());
+        }
+
+        // it('throws an error when calling modifyResource')
+        #[tokio::test]
+        async fn rejects_modify_resource_with_forbidden() {
+            let spy = Arc::new(SpyStore::new());
+            let store = ReadOnlyStore::new(Arc::clone(&spy));
+            let url = dummy_url();
+            let err = store
+                .modify_resource(&url, Bytes::from("patch"))
+                .await
+                .unwrap_err();
+            assert!(matches!(err, StorageError::Forbidden(_)));
+            assert!(spy.recorded().is_empty());
+        }
+    }
+}

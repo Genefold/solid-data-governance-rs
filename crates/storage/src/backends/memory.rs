@@ -124,53 +124,144 @@ impl<V: Clone + Send + Sync + 'static> KeyValueStorage<String, V> for MemoryMapS
 // ──────────────────────────────────────────────────────────────────────────────
 // Tests
 // ──────────────────────────────────────────────────────────────────────────────
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Mirrors the `MemoryMapStorage.test.ts` suite.
+    // ── Ported from: test/unit/storage/keyvalue/MemoryMapStorage.test.ts ──
+
+    // it('should return undefined when the key is not present')
     #[tokio::test]
-    async fn test_get_returns_none_when_absent() {
+    async fn get_returns_none_when_absent() {
         let store: MemoryMapStorage<String> = MemoryMapStorage::new();
         assert_eq!(store.get(&"missing".into()).await.unwrap(), None);
     }
 
+    // it('should return the stored value after set')
     #[tokio::test]
-    async fn test_set_and_get() {
+    async fn set_and_get_roundtrip() {
         let store: MemoryMapStorage<String> = MemoryMapStorage::new();
         store.set("k".into(), "v".into()).await.unwrap();
         assert_eq!(store.get(&"k".into()).await.unwrap(), Some("v".into()));
     }
 
+    // it('should overwrite when key already exists')
     #[tokio::test]
-    async fn test_has_reflects_presence() {
+    async fn set_overwrites_existing_value() {
+        let store: MemoryMapStorage<String> = MemoryMapStorage::new();
+        store.set("k".into(), "first".into()).await.unwrap();
+        store.set("k".into(), "second".into()).await.unwrap();
+        assert_eq!(
+            store.get(&"k".into()).await.unwrap(),
+            Some("second".into())
+        );
+    }
+
+    // it('has should return false when key absent')
+    #[tokio::test]
+    async fn has_returns_false_when_absent() {
         let store: MemoryMapStorage<String> = MemoryMapStorage::new();
         assert!(!store.has(&"k".into()).await.unwrap());
+    }
+
+    // it('has should return true after set')
+    #[tokio::test]
+    async fn has_returns_true_after_set() {
+        let store: MemoryMapStorage<String> = MemoryMapStorage::new();
         store.set("k".into(), "v".into()).await.unwrap();
         assert!(store.has(&"k".into()).await.unwrap());
     }
 
+    // it('has should return false after delete')
     #[tokio::test]
-    async fn test_delete_returns_flag() {
+    async fn has_returns_false_after_delete() {
         let store: MemoryMapStorage<String> = MemoryMapStorage::new();
-        // Deleting absent key → false
-        assert!(!store.delete(&"k".into()).await.unwrap());
         store.set("k".into(), "v".into()).await.unwrap();
-        // Deleting present key → true
-        assert!(store.delete(&"k".into()).await.unwrap());
-        // Gone now
+        store.delete(&"k".into()).await.unwrap();
         assert!(!store.has(&"k".into()).await.unwrap());
     }
 
+    // it('delete returns false when key was not present')
     #[tokio::test]
-    async fn test_multiple_keys() {
+    async fn delete_returns_false_for_missing_key() {
+        let store: MemoryMapStorage<String> = MemoryMapStorage::new();
+        assert!(!store.delete(&"k".into()).await.unwrap());
+    }
+
+    // it('delete returns true when key was present')
+    #[tokio::test]
+    async fn delete_returns_true_for_existing_key() {
+        let store: MemoryMapStorage<String> = MemoryMapStorage::new();
+        store.set("k".into(), "v".into()).await.unwrap();
+        assert!(store.delete(&"k".into()).await.unwrap());
+    }
+
+    // it('delete removes the entry so get returns None afterwards')
+    #[tokio::test]
+    async fn delete_removes_entry() {
+        let store: MemoryMapStorage<String> = MemoryMapStorage::new();
+        store.set("k".into(), "v".into()).await.unwrap();
+        store.delete(&"k".into()).await.unwrap();
+        assert_eq!(store.get(&"k".into()).await.unwrap(), None);
+    }
+
+    // it('entries returns all key-value pairs')
+    #[tokio::test]
+    async fn entries_returns_all_pairs() {
         let store: MemoryMapStorage<String> = MemoryMapStorage::new();
         store.set("a".into(), "apple".into()).await.unwrap();
         store.set("b".into(), "banana".into()).await.unwrap();
-        assert_eq!(store.get(&"a".into()).await.unwrap(), Some("apple".into()));
-        assert_eq!(store.get(&"b".into()).await.unwrap(), Some("banana".into()));
         let mut entries = store.entries().await.unwrap();
-        entries.sort_by(|a, b| a.0.cmp(&b.0));
-        assert_eq!(entries, vec![("a".into(), "apple".into()), ("b".into(), "banana".into())]);
+        entries.sort_by(|x, y| x.0.cmp(&y.0));
+        assert_eq!(
+            entries,
+            vec![
+                ("a".to_string(), "apple".to_string()),
+                ("b".to_string(), "banana".to_string()),
+            ]
+        );
+    }
+
+    // it('entries returns empty vec for empty store')
+    #[tokio::test]
+    async fn entries_empty_for_new_store() {
+        let store: MemoryMapStorage<String> = MemoryMapStorage::new();
+        assert!(store.entries().await.unwrap().is_empty());
+    }
+
+    // it('entries reflects deletions')
+    #[tokio::test]
+    async fn entries_reflects_deletions() {
+        let store: MemoryMapStorage<String> = MemoryMapStorage::new();
+        store.set("a".into(), "apple".into()).await.unwrap();
+        store.set("b".into(), "banana".into()).await.unwrap();
+        store.delete(&"a".into()).await.unwrap();
+        let entries = store.entries().await.unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0], ("b".to_string(), "banana".to_string()));
+    }
+
+    // it('clone shares the same underlying map (Arc)')
+    #[tokio::test]
+    async fn clone_shares_underlying_map() {
+        let store: MemoryMapStorage<String> = MemoryMapStorage::new();
+        store.set("k".into(), "v1".into()).await.unwrap();
+        let clone = store.clone();
+        clone.set("k".into(), "v2".into()).await.unwrap();
+        // Both handles see the updated value
+        assert_eq!(store.get(&"k".into()).await.unwrap(), Some("v2".into()));
+        assert_eq!(clone.get(&"k".into()).await.unwrap(), Some("v2".into()));
+    }
+
+    // it('from_iter pre-populates the store')
+    #[tokio::test]
+    async fn from_iter_pre_populates() {
+        let store: MemoryMapStorage<String> = MemoryMapStorage::from_iter([
+            ("x".to_string(), "1".to_string()),
+            ("y".to_string(), "2".to_string()),
+        ]);
+        assert_eq!(store.get(&"x".into()).await.unwrap(), Some("1".into()));
+        assert_eq!(store.get(&"y".into()).await.unwrap(), Some("2".into()));
     }
 }

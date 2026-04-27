@@ -133,18 +133,132 @@ mod axum_impl {
 mod tests {
     use super::*;
 
+    // ── Ported from: test/unit/util/errors/HttpError.test.ts ──────────────
+    // and test/unit/util/errors/*.test.ts
+
+    // --- status_code() ---
+
     #[test]
-    fn status_codes() {
-        assert_eq!(SolidError::NotFound("x".into()).status_code(), 404);
-        assert_eq!(SolidError::Forbidden("x".into()).status_code(), 403);
-        assert_eq!(SolidError::Internal("x".into()).status_code(), 500);
-        assert_eq!(SolidError::NotModified.status_code(), 304);
+    fn status_codes_all_variants() {
+        let cases: &[(&str, SolidError, u16)] = &[
+            ("NotModified",          SolidError::NotModified,                     304),
+            ("BadRequest",           SolidError::BadRequest("".into()),            400),
+            ("Unauthorized",         SolidError::Unauthorized("".into()),          401),
+            ("Forbidden",            SolidError::Forbidden("".into()),             403),
+            ("NotFound",             SolidError::NotFound("".into()),              404),
+            ("MethodNotAllowed",     SolidError::MethodNotAllowed("".into()),      405),
+            ("NotAcceptable",        SolidError::NotAcceptable("".into()),         406),
+            ("Conflict",             SolidError::Conflict("".into()),              409),
+            ("Gone",                 SolidError::Gone("".into()),                  410),
+            ("PreconditionFailed",   SolidError::PreconditionFailed("".into()),    412),
+            ("UnsupportedMediaType", SolidError::UnsupportedMediaType("".into()), 415),
+            ("UnprocessableEntity",  SolidError::UnprocessableEntity("".into()),  422),
+            ("Internal",             SolidError::Internal("".into()),              500),
+            ("NotImplemented",       SolidError::NotImplemented("".into()),        501),
+            ("ServiceUnavailable",   SolidError::ServiceUnavailable("".into()),    503),
+        ];
+        for (name, err, expected_code) in cases {
+            assert_eq!(
+                err.status_code(), *expected_code,
+                "wrong status code for {name}"
+            );
+        }
+    }
+
+    // --- is_client_error() / is_server_error() ---
+    // Mirrors: it('should correctly identify client errors')
+    //          it('should correctly identify server errors')
+
+    #[test]
+    fn bad_request_is_client_error_not_server_error() {
+        let e = SolidError::BadRequest("oops".into());
+        assert!(e.is_client_error(), "expected 400 to be a client error");
+        assert!(!e.is_server_error(), "400 should not be a server error");
     }
 
     #[test]
-    fn client_vs_server_error() {
-        assert!(SolidError::BadRequest("x".into()).is_client_error());
-        assert!(!SolidError::BadRequest("x".into()).is_server_error());
-        assert!(SolidError::Internal("x".into()).is_server_error());
+    fn forbidden_is_client_error() {
+        let e = SolidError::Forbidden("write blocked".into());
+        assert!(e.is_client_error());
+        assert!(!e.is_server_error());
+    }
+
+    #[test]
+    fn not_found_is_client_error() {
+        let e = SolidError::NotFound("resource gone".into());
+        assert!(e.is_client_error());
+        assert!(!e.is_server_error());
+    }
+
+    #[test]
+    fn internal_is_server_error_not_client_error() {
+        let e = SolidError::Internal("boom".into());
+        assert!(e.is_server_error(), "expected 500 to be a server error");
+        assert!(!e.is_client_error(), "500 should not be a client error");
+    }
+
+    #[test]
+    fn not_implemented_is_server_error() {
+        let e = SolidError::NotImplemented("NYI".into());
+        assert!(e.is_server_error());
+        assert!(!e.is_client_error());
+    }
+
+    #[test]
+    fn not_modified_is_neither_client_nor_server_error() {
+        let e = SolidError::NotModified;
+        assert!(!e.is_client_error(), "304 is not a client error");
+        assert!(!e.is_server_error(), "304 is not a server error");
+    }
+
+    // --- Display / message formatting ---
+    // Mirrors: it('should contain the status and message in the display string')
+
+    #[test]
+    fn not_found_message_contains_status_and_payload() {
+        let e = SolidError::NotFound("resource gone".into());
+        let msg = e.to_string();
+        assert!(msg.contains("404"),          "expected '404' in '{msg}'");
+        assert!(msg.contains("resource gone"), "expected payload in '{msg}'");
+    }
+
+    #[test]
+    fn forbidden_message_contains_status_and_payload() {
+        let e = SolidError::Forbidden("write blocked".into());
+        let msg = e.to_string();
+        assert!(msg.contains("403"));
+        assert!(msg.contains("write blocked"));
+    }
+
+    #[test]
+    fn internal_message_contains_status_and_payload() {
+        let e = SolidError::Internal("unexpected".into());
+        let msg = e.to_string();
+        assert!(msg.contains("500"));
+        assert!(msg.contains("unexpected"));
+    }
+
+    #[test]
+    fn not_modified_display_contains_304() {
+        let msg = SolidError::NotModified.to_string();
+        assert!(msg.contains("304"));
+    }
+
+    // --- Clone / Debug (derived) ---
+    // Mirrors: it('should be clonable')
+
+    #[test]
+    fn solid_error_is_cloneable() {
+        let original = SolidError::Conflict("version mismatch".into());
+        let cloned = original.clone();
+        assert_eq!(original.status_code(), cloned.status_code());
+        assert_eq!(original.to_string(), cloned.to_string());
+    }
+
+    #[test]
+    fn solid_error_is_debuggable() {
+        let e = SolidError::NotFound("x".into());
+        let s = format!("{e:?}");
+        assert!(s.contains("NotFound"));
     }
 }
