@@ -1,0 +1,16 @@
+[package]
+name        = "integration-tests"
+version     = "0.1.0"
+edition     = "2021"
+description = "HTTP integration tests exercised against a live Solid Community Server"
+
+[dependencies]
+tokio       = { workspace = true }
+reqwest     = { workspace = true }
+url         = { workspace = true }
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+anyhow      = { workspace = true }
+tracing     = { workspace = true }
+bytes       = { workspace = true }
+uuid        = { workspace = true }
