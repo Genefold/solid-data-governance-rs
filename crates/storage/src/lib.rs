@@ -1,16 +1,19 @@
-//! Storage abstractions for the Solid Community Server.
+//! solid-storage — storage layer for the Solid Community Server (Rust port).
 //!
-//! Provides the `ResourceStore` and `KeyValueStore` traits together with
-//! concrete in-memory and file-backed implementations.
+//! Mirrors the TypeScript packages:
+//!   src/storage/ResourceStore.ts      → [`ResourceStore`] + [`ResourceSet`]
+//!   src/storage/keyvalue/             → [`KeyValueStorage`] + backends
+//!   src/storage/PassthroughStore.ts   → [`PassthroughStore`]
+//!   src/storage/BaseResourceStore.ts  → [`BaseResourceStore`]
+//!   src/storage/ReadOnlyStore.ts      → [`ReadOnlyStore`]
 
+pub mod backends;
 pub mod error;
 pub mod key_value;
 pub mod resource_store;
 
-pub mod backends {
-    pub mod memory;
-    pub mod file;
-}
-
-pub use key_value::KeyValueStore;
-pub use resource_store::ResourceStore;
+pub use error::StorageError;
+pub use key_value::{KeyValueStorage, StorageEntry};
+pub use resource_store::{
+    BaseResourceStore, ChangeMap, PassthroughStore, ReadOnlyStore, ResourceSet, ResourceStore,
+};
