@@ -33,7 +33,10 @@ jobs:
       - name: Start solid-community-rs
         shell: bash
         run: |
-          ./target/release/cli --port 3000 --host 0.0.0.0 &
+          ./target/release/cli \
+            --port 3000 \
+            --host 0.0.0.0 \
+            --base-url http://127.0.0.1:3000/ &
           echo "SERVER_PID=$!" >> "$GITHUB_ENV"
 
       - name: Wait for server
@@ -89,14 +92,11 @@ jobs:
       - name: Write CTH env file
         shell: bash
         run: |
+          # No user credentials — server has no IdP so CTH must run
+          # unauthenticated. Omitting users.*.webid causes CTH to skip
+          # the REGISTER CLIENTS phase and go straight to running tests.
           cat > cth.env <<'ENV'
           SERVER_ROOT=http://127.0.0.1:3000/
-          users.alice.webid=http://127.0.0.1:3000/alice/profile/card#me
-          users.alice.username=alice
-          users.alice.password=
-          users.bob.webid=http://127.0.0.1:3000/bob/profile/card#me
-          users.bob.username=bob
-          users.bob.password=
           ORIGIN=http://example.org
           CTH_TIMEOUT=10000
           ENV
@@ -108,8 +108,8 @@ jobs:
           cat config/test-subjects.ttl
           echo "=== cth.env ==="
           cat cth.env
-          echo "=== server reachable from host ==="
-          curl -v http://127.0.0.1:3000/ 2>&1 | head -20
+          echo "=== server health ==="
+          curl -v http://127.0.0.1:3000/ 2>&1 | head -30
 
       - name: Create output directories
         shell: bash
