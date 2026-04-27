@@ -16,7 +16,12 @@ use tracing_subscriber::EnvFilter;
 #[command(name = "solid-community-rs", author, version, about, long_about = None)]
 pub struct Cli {
     /// Base URL of the server (e.g. http://localhost:3000/)
-    #[arg(short = 'b', long, default_value = "http://localhost:3000/", env = "CSS_BASE_URL")]
+    #[arg(
+        short = 'b',
+        long,
+        default_value = "http://localhost:3500/",
+        env = "CSS_BASE_URL"
+    )]
     pub base_url: String,
 
     /// TCP port to listen on.
@@ -41,8 +46,8 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // Initialise structured tracing.
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(&cli.log_level));
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&cli.log_level));
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_target(false)
@@ -69,12 +74,7 @@ async fn main() -> Result<()> {
             )
         })?
         .next()
-        .with_context(|| {
-            format!(
-                "Host `{}` resolved to zero addresses.",
-                cli.host
-            )
-        })?;
+        .with_context(|| format!("Host `{}` resolved to zero addresses.", cli.host))?;
 
     tracing::info!("Binding to {addr}");
 
