@@ -9,6 +9,7 @@ http-types = { path = "../http-types" }
 solid-storage = { path = "../solid-storage" }
 tokio = { workspace = true }
 async-trait = { workspace = true }
+url = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }

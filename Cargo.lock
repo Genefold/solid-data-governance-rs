@@ -104,6 +104,7 @@ dependencies = [
  "solid-storage",
  "thiserror 1.0.69",
  "tokio",
+ "url",
 ]
 
 [[package]]
@@ -718,6 +719,7 @@ dependencies = [
  "solid-storage",
  "thiserror 1.0.69",
  "tokio",
+ "url",
  "uuid",
 ]
 
