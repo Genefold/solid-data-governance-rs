@@ -2,13 +2,14 @@
 //!
 //! Entry point: parse CLI arguments, configure tracing, and boot the server.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 use server_core::{
     app::{App, AppConfig},
     pipeline::RequestPipeline,
 };
-use tracing_subscriber::{EnvFilter, FmtSubscriber};
+use std::net::ToSocketAddrs;
+use tracing_subscriber::EnvFilter;
 
 /// Solid Community Server — Rust port.
 #[derive(Parser, Debug)]
@@ -23,6 +24,10 @@ pub struct Cli {
     pub port: u16,
 
     /// Hostname or IP address to bind to.
+    ///
+    /// Accepts both hostnames ("localhost") and IP literals ("0.0.0.0",
+    /// "127.0.0.1", "::1"). The value is resolved via the OS resolver so
+    /// DNS names work too.
     #[arg(long, default_value = "localhost", env = "CSS_HOST")]
     pub host: String,
 
@@ -44,7 +49,34 @@ async fn main() -> Result<()> {
         .compact()
         .init();
 
-    let addr: std::net::SocketAddr = format!("{}:{}", cli.host, cli.port).parse()?;
+    // ── Resolve host → SocketAddr ──────────────────────────────────────────
+    //
+    // `SocketAddr::parse()` only accepts numeric IP literals; hostnames such
+    // as "localhost" cause `invalid socket address syntax`.
+    //
+    // `ToSocketAddrs` performs a blocking OS-level lookup (getaddrinfo) that
+    // handles both hostnames and IP literals uniformly.  The lookup is
+    // intentionally synchronous: it happens once at startup before the async
+    // runtime is under any load.
+    let addr = format!("{}:{}", cli.host, cli.port)
+        .to_socket_addrs()
+        .with_context(|| {
+            format!(
+                "Could not resolve bind address `{}:{}`. \
+                 Pass a hostname resolvable on this machine or an IP literal \
+                 such as `127.0.0.1` or `0.0.0.0`.",
+                cli.host, cli.port
+            )
+        })?
+        .next()
+        .with_context(|| {
+            format!(
+                "Host `{}` resolved to zero addresses.",
+                cli.host
+            )
+        })?;
+
+    tracing::info!("Binding to {addr}");
 
     let config = AppConfig {
         base_url: cli.base_url.clone(),
