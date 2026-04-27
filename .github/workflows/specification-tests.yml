@@ -53,33 +53,78 @@ jobs:
       - name: Seed WebID profile documents
         shell: bash
         run: |
-          # CTH requires alice and bob WebID documents to exist before it starts.
-          # We PUT minimal Turtle profile cards so the server returns 200 + RDF
-          # when CTH fetches them during REGISTER CLIENTS.
+          # Write Turtle to temp files with no leading indentation,
+          # then PUT them. solid:oidcIssuer points at the server root
+          # so CTH can read the issuer URI from the card as a fallback.
+
+          cat > /tmp/alice-card.ttl <<'TTL'
+@prefix foaf: <http://xmlns.com/foaf/0.1/> .
+@prefix solid: <http://www.w3.org/ns/solid/terms#> .
+@prefix pim: <http://www.w3.org/ns/pim/space#> .
+
+<http://127.0.0.1:3000/alice/profile/card#me>
+    a foaf:Person ;
+    foaf:name "Alice" ;
+    solid:oidcIssuer <http://127.0.0.1:3000/> ;
+    pim:storage <http://127.0.0.1:3000/alice/> .
+TTL
+
+          cat > /tmp/bob-card.ttl <<'TTL'
+@prefix foaf: <http://xmlns.com/foaf/0.1/> .
+@prefix solid: <http://www.w3.org/ns/solid/terms#> .
+@prefix pim: <http://www.w3.org/ns/pim/space#> .
+
+<http://127.0.0.1:3000/bob/profile/card#me>
+    a foaf:Person ;
+    foaf:name "Bob" ;
+    solid:oidcIssuer <http://127.0.0.1:3000/> ;
+    pim:storage <http://127.0.0.1:3000/bob/> .
+TTL
 
           for USER in alice bob; do
-            # Ensure parent containers exist (POST to create if needed)
-            curl --silent --output /dev/null --request POST \
+            echo "--- seeding ${USER} ---"
+
+            # Create parent containers (ignore errors if already exist)
+            curl --silent --output /dev/null \
+              --request POST \
+              --header 'Content-Type: text/turtle' \
+              --header "Slug: ${USER}" \
+              http://127.0.0.1:3000/ || true
+
+            curl --silent --output /dev/null \
+              --request POST \
               --header 'Content-Type: text/turtle' \
               --header 'Slug: profile' \
-              --data '' \
               http://127.0.0.1:3000/${USER}/ || true
 
             # PUT the WebID card
-            curl --silent --show-error --fail \
+            HTTP_STATUS=$(curl --silent --output /dev/null --write-out "%{http_code}" \
               --request PUT \
               --header 'Content-Type: text/turtle' \
-              --data "@prefix foaf: <http://xmlns.com/foaf/0.1/> .
-          <http://127.0.0.1:3000/${USER}/profile/card#me>
-              a foaf:Person ;
-              foaf:name \"${USER^}\" ." \
-              http://127.0.0.1:3000/${USER}/profile/card
-            echo "Seeded ${USER} WebID: HTTP $?"
+              --data-binary @/tmp/${USER}-card.ttl \
+              http://127.0.0.1:3000/${USER}/profile/card)
+            echo "PUT ${USER}/profile/card -> HTTP ${HTTP_STATUS}"
+
+            if [[ "$HTTP_STATUS" != "200" && "$HTTP_STATUS" != "201" && "$HTTP_STATUS" != "204" ]]; then
+              echo "ERROR: unexpected status ${HTTP_STATUS} seeding ${USER} WebID"
+              exit 1
+            fi
           done
 
+          # Create alice's test container
+          curl --silent --output /dev/null \
+            --request POST \
+            --header 'Content-Type: text/turtle' \
+            --header 'Slug: test' \
+            http://127.0.0.1:3000/alice/ || true
+
           # Verify both cards are readable
-          curl --silent --fail -I http://127.0.0.1:3000/alice/profile/card
-          curl --silent --fail -I http://127.0.0.1:3000/bob/profile/card
+          echo "--- verifying alice ---"
+          curl --silent --fail --header 'Accept: text/turtle' \
+            http://127.0.0.1:3000/alice/profile/card
+          echo "--- verifying bob ---"
+          curl --silent --fail --header 'Accept: text/turtle' \
+            http://127.0.0.1:3000/bob/profile/card
 
       - name: Clone specification-tests
         shell: bash
@@ -93,59 +138,68 @@ jobs:
         run: |
           mkdir -p config
           cat > config/application.yaml <<'YAML'
-          subjects: /app/config/test-subjects.ttl
-          sources:
-            - https://solidproject.org/TR/protocol
-            - https://github.com/solid-contrib/specification-tests/blob/main/protocol/solid-protocol-test-manifest.ttl
-            - https://github.com/solid-contrib/specification-tests/blob/main/protocol/requirement-comments.ttl
-          mappings:
-            - prefix: https://github.com/solid-contrib/specification-tests/blob/main
-              path: /data
-          YAML
+subjects: /app/config/test-subjects.ttl
+sources:
+  - https://solidproject.org/TR/protocol
+  - https://github.com/solid-contrib/specification-tests/blob/main/protocol/solid-protocol-test-manifest.ttl
+  - https://github.com/solid-contrib/specification-tests/blob/main/protocol/requirement-comments.ttl
+mappings:
+  - prefix: https://github.com/solid-contrib/specification-tests/blob/main
+    path: /data
+YAML
 
       - name: Write config/test-subjects.ttl
         shell: bash
         run: |
           cat > config/test-subjects.ttl <<'TTL'
-          @prefix solid-test: <https://github.com/solid/conformance-test-harness/vocab#> .
-          @prefix earl: <http://www.w3.org/ns/earl#> .
-          @prefix doap: <http://usefulinc.com/ns/doap#> .
+@prefix solid-test: <https://github.com/solid/conformance-test-harness/vocab#> .
+@prefix earl: <http://www.w3.org/ns/earl#> .
+@prefix doap: <http://usefulinc.com/ns/doap#> .
 
-          <https://github.com/tuned-org-uk/solid-community-rs#server>
-              a earl:Software, earl:TestSubject ;
-              doap:name "solid-community-rs" ;
-              doap:programming-language "Rust" ;
-              doap:homepage <https://github.com/tuned-org-uk/solid-community-rs> ;
-              solid-test:skip "acp wac authentication" ;
-              solid-test:serverRoot <http://127.0.0.1:3000/> .
-          TTL
+<https://github.com/tuned-org-uk/solid-community-rs#server>
+    a earl:Software, earl:TestSubject ;
+    doap:name "solid-community-rs" ;
+    doap:programming-language "Rust" ;
+    doap:homepage <https://github.com/tuned-org-uk/solid-community-rs> ;
+    solid-test:skip "acp wac authentication" ;
+    solid-test:serverRoot <http://127.0.0.1:3000/> .
+TTL
 
       - name: Write CTH env file
         shell: bash
         run: |
+          # Use the exact UPPERCASE variable names required by CTH (see USAGE.md).
+          # SOLID_IDENTITY_PROVIDER is the URI passed to withOptionalLocalhostSupport()
+          # inside AuthManager.authenticate() — without it uri is null -> NPE.
+          # TEST_CONTAINER is alice's absolute test container URL.
           cat > cth.env <<'ENV'
-          SERVER_ROOT=http://127.0.0.1:3000/
-          users.alice.webid=http://127.0.0.1:3000/alice/profile/card#me
-          users.alice.username=alice
-          users.alice.password=unused
-          users.bob.webid=http://127.0.0.1:3000/bob/profile/card#me
-          users.bob.username=bob
-          users.bob.password=unused
-          ORIGIN=http://example.org
-          CTH_TIMEOUT=10000
-          ENV
+SOLID_IDENTITY_PROVIDER=http://127.0.0.1:3000/
+RESOURCE_SERVER_ROOT=http://127.0.0.1:3000
+TEST_CONTAINER=http://127.0.0.1:3000/alice/test/
+USERS_ALICE_WEBID=http://127.0.0.1:3000/alice/profile/card#me
+USERS_ALICE_USERNAME=alice
+USERS_ALICE_PASSWORD=unused
+USERS_BOB_WEBID=http://127.0.0.1:3000/bob/profile/card#me
+USERS_BOB_USERNAME=bob
+USERS_BOB_PASSWORD=unused
+ORIGIN=http://example.org
+CTH_TIMEOUT=10000
+quarkus.log.category."org.solid.testharness.http.AuthManager".level=DEBUG
+ENV
 
       - name: Show generated config (debug)
         shell: bash
         run: |
           echo "=== test-subjects.ttl ==="
           cat config/test-subjects.ttl
+          echo "=== application.yaml ==="
+          cat config/application.yaml
           echo "=== cth.env ==="
           cat cth.env
           echo "=== alice WebID ==="
-          curl -s http://127.0.0.1:3000/alice/profile/card
+          curl -s --header 'Accept: text/turtle' http://127.0.0.1:3000/alice/profile/card
           echo "=== bob WebID ==="
-          curl -s http://127.0.0.1:3000/bob/profile/card
+          curl -s --header 'Accept: text/turtle' http://127.0.0.1:3000/bob/profile/card
 
       - name: Create output directories
         shell: bash
