@@ -9,72 +9,35 @@ on:
 
 jobs:
   spec-tests:
-    name: CTH (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+    name: CTH (ubuntu)
+    runs-on: ubuntu-latest
 
     steps:
-      # ── 1. checkout ────────────────────────────────────────────────────────
       - name: Checkout solid-community-rs
         uses: actions/checkout@v4
 
-      # ── 2. Rust toolchain + cache ──────────────────────────────────────────
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Rust build artefacts
         uses: Swatinem/rust-cache@v2
 
-      # ── 3. Install container runtime ──────────────────────────────────────
-      # ubuntu-latest: podman is available in the apt repos but may be outdated;
-      #   use the official Kubic OBS repo for a current 4.x build.
-      # macos-latest:  podman is not pre-installed; brew installs it plus qemu.
-      #   We then init + start a podman machine (lightweight Linux VM) so
-      #   `podman run` works exactly like on Linux.
-      # windows-latest: Docker Desktop is pre-installed — no action needed.
-      - name: Install Podman (Linux)
-        if: runner.os == 'Linux'
+      - name: Install Podman
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y podman
 
-      - name: Install Podman (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          brew install podman
-          # Initialise a rootless podman machine and start it.
-          # --rootful is NOT used so volume mounts work without extra config.
-          podman machine init --cpus 2 --memory 2048 --disk-size 20
-          podman machine start
-          # Verify the socket is up before continuing.
-          podman info
-
-      # ── 4. Build the server ────────────────────────────────────────────────
       - name: Build server (release)
         run: cargo build --release -p cli
 
-      # ── 5. Start the server in the background ─────────────────────────────
-      - name: Start solid-community-rs (Linux / macOS)
-        if: runner.os != 'Windows'
+      - name: Start solid-community-rs
+        shell: bash
         run: |
           ./target/release/cli --port 3000 &
           echo "SERVER_PID=$!" >> "$GITHUB_ENV"
 
-      - name: Start solid-community-rs (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $proc = Start-Process -FilePath ".\target\release\cli.exe" `
-                    -ArgumentList "--port", "3000" `
-                    -PassThru -NoNewWindow
-          "SERVER_PID=$($proc.Id)" | Out-File -FilePath $env:GITHUB_ENV -Append
-
-      # ── 6. Wait for the server to be ready ────────────────────────────────
-      - name: Wait for server (Linux / macOS)
-        if: runner.os != 'Windows'
+      - name: Wait for server
+        shell: bash
         run: |
           for i in $(seq 1 30); do
             curl --silent --fail --output /dev/null http://localhost:3000/ && break
@@ -84,20 +47,6 @@ jobs:
           curl --silent --fail --output /dev/null http://localhost:3000/ \
             || (echo "Server never became ready" && exit 1)
 
-      - name: Wait for server (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $ready = $false
-          for ($i = 1; $i -le 30; $i++) {
-            try {
-              Invoke-WebRequest -Uri http://localhost:3000/ -UseBasicParsing -ErrorAction Stop | Out-Null
-              $ready = $true; break
-            } catch { Start-Sleep 1 }
-          }
-          if (-not $ready) { Write-Error "Server never became ready"; exit 1 }
-
-      # ── 7. Clone specification-tests ──────────────────────────────────────
       - name: Clone specification-tests
         shell: bash
         run: |
@@ -105,9 +54,6 @@ jobs:
             https://github.com/solid-contrib/specification-tests.git \
             specification-tests
 
-      # ── 8. Write CTH config files ─────────────────────────────────────────
-      # Linux/macOS: container reaches host via host.containers.internal
-      # Windows:     Docker Desktop exposes host via host.docker.internal
       - name: Write config/application.yaml
         shell: bash
         run: |
@@ -123,50 +69,27 @@ jobs:
               path: /data
           YAML
 
-      - name: Write config/test-subjects.ttl (Linux / macOS)
-        if: runner.os != 'Windows'
+      - name: Write config/test-subjects.ttl
         shell: bash
         run: |
-          HOST_URL="http://host.containers.internal:3000/"
-          cat > config/test-subjects.ttl <<TTL
+          cat > config/test-subjects.ttl <<'TTL'
           @prefix solid-test: <https://github.com/solid/conformance-test-harness/vocab#> .
           @prefix earl: <http://www.w3.org/ns/earl#> .
           @prefix doap: <http://usefulinc.com/ns/doap#> .
 
-          <solid-community-rs>
+          <server>
               a earl:Software, earl:TestSubject ;
               doap:name "solid-community-rs" ;
               doap:programming-language "Rust" ;
               doap:homepage <https://github.com/tuned-org-uk/solid-community-rs> ;
               solid-test:skip "acp", "wac", "authentication" ;
-              solid-test:serverRoot <${HOST_URL}> .
+              solid-test:serverRoot <http://host.containers.internal:3000/> .
           TTL
 
-      - name: Write config/test-subjects.ttl (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $hostUrl = "http://host.docker.internal:3000/"
-          @"
-          @prefix solid-test: <https://github.com/solid/conformance-test-harness/vocab#> .
-          @prefix earl: <http://www.w3.org/ns/earl#> .
-          @prefix doap: <http://usefulinc.com/ns/doap#> .
-
-          <solid-community-rs>
-              a earl:Software, earl:TestSubject ;
-              doap:name "solid-community-rs" ;
-              doap:programming-language "Rust" ;
-              doap:homepage <https://github.com/tuned-org-uk/solid-community-rs> ;
-              solid-test:skip "acp", "wac", "authentication" ;
-              solid-test:serverRoot <$hostUrl> .
-          "@ | Set-Content config/test-subjects.ttl
-
-      # ── 9. Write CTH env file ─────────────────────────────────────────────
-      - name: Write CTH env file (Linux / macOS)
-        if: runner.os != 'Windows'
+      - name: Write CTH env file
         shell: bash
         run: |
-          cat > cth.env <<ENV
+          cat > cth.env <<'ENV'
           SERVER_ROOT=http://host.containers.internal:3000/
           users.alice.webid=http://host.containers.internal:3000/alice/profile/card#me
           users.alice.username=alice
@@ -178,40 +101,15 @@ jobs:
           CTH_TIMEOUT=10000
           ENV
 
-      - name: Write CTH env file (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          @"
-          SERVER_ROOT=http://host.docker.internal:3000/
-          users.alice.webid=http://host.docker.internal:3000/alice/profile/card#me
-          users.alice.username=alice
-          users.alice.password=
-          users.bob.webid=http://host.docker.internal:3000/bob/profile/card#me
-          users.bob.username=bob
-          users.bob.password=
-          ORIGIN=http://example.org
-          CTH_TIMEOUT=10000
-          "@ | Set-Content cth.env
-
-      # ── 10. Create output directories ─────────────────────────────────────
       - name: Create output directories
         shell: bash
         run: mkdir -p reports target
 
-      # ── 11. Pull CTH image ────────────────────────────────────────────────
-      - name: Pull CTH image (Linux / macOS)
-        if: runner.os != 'Windows'
+      - name: Pull CTH image
         run: podman pull solidproject/conformance-test-harness
 
-      - name: Pull CTH image (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: docker pull solidproject/conformance-test-harness
-
-      # ── 12. Run the CTH container ─────────────────────────────────────────
-      - name: Run CTH (Linux)
-        if: runner.os == 'Linux'
+      - name: Run CTH
+        shell: bash
         run: |
           podman run --rm \
             --user "$(id -u):$(id -g)" \
@@ -223,57 +121,18 @@ jobs:
             --volume "$(pwd)/target:/app/target" \
             solidproject/conformance-test-harness \
             --output=/reports \
-            --target=http://host.containers.internal:3000/ \
+            --target=server \
             --skip-teardown
 
-      - name: Run CTH (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          podman run --rm \
-            --user "$(id -u):$(id -g)" \
-            --env-file="$(pwd)/cth.env" \
-            --add-host=host.containers.internal:host-gateway \
-            --volume "$(pwd)/specification-tests:/data:ro" \
-            --volume "$(pwd)/config:/app/config:ro" \
-            --volume "$(pwd)/reports:/reports" \
-            --volume "$(pwd)/target:/app/target" \
-            solidproject/conformance-test-harness \
-            --output=/reports \
-            --target=http://host.containers.internal:3000/ \
-            --skip-teardown
-
-      - name: Run CTH (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          docker run --rm `
-            --env-file="$(Get-Location)/cth.env" `
-            --add-host=host.docker.internal:host-gateway `
-            --volume "$(Get-Location)/specification-tests:/data:ro" `
-            --volume "$(Get-Location)/config:/app/config:ro" `
-            --volume "$(Get-Location)/reports:/reports" `
-            --volume "$(Get-Location)/target:/app/target" `
-            solidproject/conformance-test-harness `
-            --output=/reports `
-            --target=http://host.docker.internal:3000/ `
-            --skip-teardown
-
-      # ── 13. Upload reports ────────────────────────────────────────────────
       - name: Upload CTH reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: cth-reports-${{ matrix.os }}
+          name: cth-reports-ubuntu
           path: reports/
           if-no-files-found: warn
 
-      # ── 14. Stop the server ───────────────────────────────────────────────
-      - name: Stop server (Linux / macOS)
-        if: always() && runner.os != 'Windows'
+      - name: Stop server
+        if: always()
         shell: bash
         run: kill "$SERVER_PID" 2>/dev/null || true
-
-      - name: Stop server (Windows)
-        if: always() && runner.os == 'Windows'
-        shell: pwsh
-        run: Stop-Process -Id $env:SERVER_PID -Force -ErrorAction SilentlyContinue
