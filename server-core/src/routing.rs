@@ -4,7 +4,7 @@
 
 use axum::{
     Router,
-    routing::{delete, get, head, options, patch, post, put},
+    routing::get,
 };
 use std::sync::Arc;
 

@@ -8,7 +8,7 @@
 
 use axum::{
     body::Body,
-    http::{HeaderMap, HeaderName, HeaderValue, Request, Response},
+    http::{HeaderName, HeaderValue, Request, Response},
     middleware::Next,
 };
 use tracing::{debug, info};
