@@ -1,12 +1,12 @@
 [package]
 name = "server-core"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 description = "Request pipeline, routing, middleware, lifecycle management, and app runner"
 
 [dependencies]
 http-types = { path = "../http-types", features = ["axum"] }
-storage = { path = "../storage" }
+solid-storage = { path = "../solid-storage" }
 authz = { path = "../authz" }
 identity = { path = "../identity" }
 static-assets = { path = "../static-assets" }

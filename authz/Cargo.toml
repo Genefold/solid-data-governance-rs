@@ -1,14 +1,14 @@
 [package]
-name = "static-assets"
+name = "authz"
 version = "0.1.0"
-edition = "2021"
-description = "Static asset serving: URL-to-filesystem mapping with content-type detection and optional caching"
+edition = "2024"
+description = "Web Access Control (WAC) and Access Control Policy (ACP) permission evaluation"
 
 [dependencies]
 http-types = { path = "../http-types" }
+solid-storage = { path = "../solid-storage" }
 tokio = { workspace = true }
 async-trait = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
-mime = { workspace = true }
-mime_guess = "2.0"
+serde = { workspace = true }

@@ -1,13 +1,13 @@
 [workspace]
 members = [
-    "crates/server-core",
-    "crates/http-types",
-    "crates/storage",
-    "crates/authz",
-    "crates/identity",
-    "crates/static-assets",
-    "crates/cli",
-    "crates/integration-tests",
+    "server-core",
+    "http-types",
+    "solid-storage",
+    "authz",
+    "identity",
+    "static-assets",
+    "cli",
+    "integration-tests",
 ]
 resolver = "2"
 

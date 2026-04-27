@@ -158,7 +158,10 @@ impl ClientCredentialsStore for BaseClientCredentialsStore {
             account_id: account_id.to_owned(),
             secret,
         };
-        self.by_id.write().unwrap().insert(id.clone(), creds.clone());
+        self.by_id
+            .write()
+            .unwrap()
+            .insert(id.clone(), creds.clone());
         self.by_label.write().unwrap().insert(label.to_owned(), id);
         Ok(creds)
     }
@@ -167,9 +170,9 @@ impl ClientCredentialsStore for BaseClientCredentialsStore {
         let removed = self.by_id.write().unwrap().remove(id);
         if let Some(creds) = removed {
             self.by_label.write().unwrap().remove(&creds.label);
-            Ok(())
         } else {
             anyhow::bail!("client credentials not found: {id}")
         }
+        Ok(None)
     }
 }

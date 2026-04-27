@@ -1,12 +1,12 @@
 [package]
 name = "identity"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 description = "OIDC provider integration, account/pod management, WebID, client credentials"
 
 [dependencies]
 http-types = { path = "../http-types" }
-storage = { path = "../storage" }
+solid-storage = { path = "../solid-storage" }
 tokio = { workspace = true }
 async-trait = { workspace = true }
 anyhow = { workspace = true }

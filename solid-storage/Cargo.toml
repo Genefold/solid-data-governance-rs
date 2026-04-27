@@ -1,10 +1,10 @@
 [package]
 name = "solid-storage"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
-solid-http-types = { path = "../http-types" }
+http-types = { path = "../http-types" }
 tokio = { workspace = true, features = ["full"] }
 async-trait = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
