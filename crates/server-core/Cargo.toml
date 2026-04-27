@@ -1,0 +1,21 @@
+[package]
+name = "server-core"
+version = "0.1.0"
+edition = "2021"
+description = "Request pipeline, routing, middleware, lifecycle management, and app runner"
+
+[dependencies]
+http-types = { path = "../http-types" }
+storage = { path = "../storage" }
+authz = { path = "../authz" }
+identity = { path = "../identity" }
+static-assets = { path = "../static-assets" }
+tokio = { workspace = true }
+axum = { workspace = true }
+hyper = { workspace = true }
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

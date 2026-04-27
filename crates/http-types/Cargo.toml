@@ -1,0 +1,14 @@
+[package]
+name = "http-types"
+version = "0.1.0"
+edition = "2021"
+description = "Core HTTP domain types: Operation, Representation, Metadata, ResourceIdentifier, and error hierarchy"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+bytes = { workspace = true }
+mime = { workspace = true }
+url = { workspace = true }
+hyper = { workspace = true }

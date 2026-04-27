@@ -1,0 +1,14 @@
+[package]
+name = "authz"
+version = "0.1.0"
+edition = "2021"
+description = "Web Access Control (WAC) and Access Control Policy (ACP) permission evaluation"
+
+[dependencies]
+http-types = { path = "../http-types" }
+storage = { path = "../storage" }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
