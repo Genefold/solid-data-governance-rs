@@ -1,4 +1,41 @@
 //! Mmap-backed binary chunk store.
+//!
+//! # Architectural decisions
+//!
+//! **Why mmap?** Zarr access patterns are read-heavy and random:
+//! clients open an array and stream individual chunks (or chunk
+//! sub-ranges via HTTP `Range`). Memory-mapping the dataset blob
+//! lets the kernel page-cache do the heavy lifting — we hand the
+//! OS a slice and it returns the bytes — with zero user-space
+//! copy until the final `to_vec()` for the HTTP body. Compared to
+//! per-request `pread`, mmap also amortises file-open cost and
+//! plays nicely with hot chunks staying resident.
+//!
+//! **Why one blob per dataset?** Phase 0 prioritises a few large
+//! sequential writes (`write_chunk` appends) over many small files
+//! (the v3 "one chunk = one key" model). One blob means one mmap
+//! per dataset, contiguous I/O during ingestion, and trivial backup
+//! semantics (`<id>.bin` + `<id>.manifest.json` is the entire dataset).
+//! When sharding lands in Phase 2 we will keep the same shape but
+//! address shard slices through the same descriptor type.
+//!
+//! **Why an in-memory `RwLock<HashMap<id, DatasetState>>` cache?**
+//! Opening a mmap and parsing the manifest is non-trivial; caching
+//! the `DatasetState` keyed by id lets repeated chunk reads skip
+//! that work. The `RwLock` is read-mostly: reads take the read
+//! guard, writes (chunk append) take the write guard *and* re-mmap.
+//! This means a `MmapChunkStore` is the single coordinator for a
+//! root directory — do not open two stores against the same root
+//! from different processes without external locking, and tests
+//! that need to observe mutations made through one store should
+//! reuse the same instance rather than constructing a second one.
+//!
+//! **Why re-mmap on every write?** Appending to the file invalidates
+//! the previous mapping's view of the tail (mmap length is captured
+//! at `Mmap::map` time). Phase 0 writes are administrative
+//! (ingestion) and rare relative to reads, so the simplicity of
+//! "write → fsync → re-map" beats a more complex remap-on-grow
+//! scheme. Hot read paths never re-mmap.
 
 use std::{
     fs::{File, OpenOptions},
@@ -15,6 +52,20 @@ use tracing::{debug, info};
 use crate::manifest::{ArrayManifest, ChunkDescriptor};
 
 /// Errors returned by the chunk store.
+///
+/// # Design notes
+///
+/// Errors are split into *transport* (I/O, JSON) and *semantic*
+/// (chunk-not-found, dataset-not-found, invalid-range) variants so
+/// the HTTP layer can map them directly to status codes:
+///
+/// - [`Self::DatasetNotFound`] / [`Self::ChunkNotFound`] → `404`
+/// - [`Self::InvalidRange`] → `416 Range Not Satisfiable`
+/// - [`Self::Io`] / [`Self::Json`] → `500`
+///
+/// Keeping these distinct (rather than a single `String` error)
+/// also makes the integration tests assert on the variant rather
+/// than scraping error messages.
 #[derive(Debug, Error)]
 pub enum ChunkStoreError {
     #[error("I/O error: {0}")]
@@ -39,11 +90,40 @@ fn manifest_path(root: &Path, dataset_id: &str) -> PathBuf {
 
 /// Replace path-unsafe characters in dataset ids so they can become file
 /// names. Datasets are typically `org/name`, so `/` becomes `__`.
+///
+/// # Why `__` (double underscore)?
+///
+/// We need an escape that:
+///
+/// 1. Survives every common filesystem (no slashes, colons, or backslashes).
+/// 2. Is unlikely to appear in real-world `org/dataset` ids.
+/// 3. Is reversible without ambiguity — [`MmapChunkStore::list_datasets`]
+///    relies on `replace("__", "/")` to recover the logical id.
+///
+/// Double underscore satisfies all three. If we ever need to support
+/// ids that legitimately contain `__`, we will move to a percent-style
+/// encoding and bump the on-disk layout version.
 fn sanitize(dataset_id: &str) -> String {
     dataset_id.replace(['/', '\\'], "__")
 }
 
 /// A single dataset blob mapped into memory.
+///
+/// # Architectural decisions
+///
+/// - **`Option<Mmap>` for the empty case.** macOS and Windows reject
+///   `mmap` of a zero-length file; we therefore lazily create the
+///   mapping and let `slice` return `InvalidRange` until the first
+///   write grows the file. Holding `None` (rather than a 0-length
+///   `Mmap`) keeps the type-level invariant that an existing mmap
+///   always covers at least one byte.
+/// - **`_file` retained for lifetime.** `Mmap` borrows the file's
+///   address space; dropping the `File` early would unmap on some
+///   platforms. The leading underscore signals "intentionally unused
+///   field, kept for RAII".
+/// - **No interior locking.** Concurrency is managed by the parent
+///   `MmapChunkStore`'s `RwLock`; `MappedBlob` itself is purely a
+///   value type for read-only slicing.
 struct MappedBlob {
     /// Live mmap. `None` when the blob file is empty (mmap of length 0
     /// is not allowed on most platforms).
@@ -101,6 +181,15 @@ impl MappedBlob {
 }
 
 /// One mapped dataset: blob + in-memory manifest.
+///
+/// Pairs the parsed [`ArrayManifest`] with the live [`MappedBlob`]
+/// so a single map lookup hands the caller everything needed to
+/// resolve a chunk key into a byte slice. The two are kept in sync
+/// inside the `MmapChunkStore` write path: blob is appended first,
+/// then re-mapped, then the manifest is mutated and persisted, so a
+/// crash mid-write leaves an over-long blob (harmless, the manifest
+/// never points at the trailing bytes) rather than a manifest that
+/// references unwritten bytes.
 struct DatasetState {
     manifest: ArrayManifest,
     blob: MappedBlob,
@@ -114,6 +203,32 @@ struct DatasetState {
 ///
 /// All reads go through mmap; writes append to the blob and rewrite the
 /// manifest. The store is safe to share across threads.
+///
+/// # Architectural decisions
+///
+/// - **Single root directory.** A pod hosts one chunk store rooted
+///   at `--data-dir` (default `./.pod-data`). Datasets are
+///   namespaced by id, not directory — keeping the layout flat
+///   means `list_datasets` is a single `read_dir` and avoids the
+///   need to walk arbitrary depths or interpret directory names as
+///   org boundaries.
+/// - **Single-process ownership.** The in-memory cache is the
+///   authoritative view for the lifetime of the process. Two
+///   processes pointing at the same root will race on writes.
+///   Phase 0 deployments run a single API replica; horizontal scale
+///   is a Phase 3 concern that will introduce an external lock or
+///   object-store backend.
+/// - **No file-system locking.** We rely on the parent `RwLock` to
+///   serialize writers within a process; we deliberately do *not*
+///   take `flock` on the blob, both for portability (Windows lacks
+///   POSIX `flock` semantics) and because cross-process safety is
+///   out of scope for Phase 0.
+/// - **Append-only blob.** `write_chunk` always seeks to end and
+///   appends. Re-writing an existing key leaves the previous bytes
+///   stranded inside the blob (the descriptor is updated to point
+///   at the new offset). This trades disk space for crash safety
+///   and write simplicity; a future `compact()` admin op can
+///   reclaim space when needed.
 pub struct MmapChunkStore {
     root: PathBuf,
     datasets: RwLock<std::collections::HashMap<String, DatasetState>>,
@@ -180,6 +295,24 @@ impl MmapChunkStore {
     /// This re-maps the blob after writing so subsequent reads see the
     /// new bytes. Concurrent writers are serialized by the dataset
     /// write lock.
+    ///
+    /// # Ordering guarantees
+    ///
+    /// The on-disk write order is fixed and intentional:
+    ///
+    /// 1. Append bytes to the blob (`seek(End) + write_all + flush`).
+    /// 2. Re-mmap the blob so subsequent reads see the new tail.
+    /// 3. Update the in-memory descriptor list (last-write-wins on
+    ///    duplicate keys).
+    /// 4. Persist the updated manifest.
+    ///
+    /// A crash between (1) and (4) leaves an over-long blob whose
+    /// trailing bytes the manifest never references — safe but
+    /// wastes space. A crash *during* (4) is mitigated by
+    /// `serde_json::to_vec_pretty`'s buffered write; a torn write
+    /// would surface as a parse error on next open and require
+    /// operator intervention. Phase 2 will introduce a `manifest.tmp`
+    /// + `rename` dance once we observe this in the wild.
     pub fn write_chunk(
         &self,
         dataset_id: &str,
@@ -252,6 +385,17 @@ impl MmapChunkStore {
     ///
     /// `range` is interpreted as `[start, end)` relative to the start of
     /// the chunk's bytes, not the blob.
+    ///
+    /// # Why chunk-relative, not blob-relative?
+    ///
+    /// HTTP `Range` headers from `zarr-python` and friends address
+    /// bytes within a single object (the chunk URL). Translating
+    /// them at the store boundary keeps the HTTP layer ignorant of
+    /// the blob packing scheme: callers say "give me bytes 1024..2048
+    /// of chunk `c/0/3`" and the store internally adds the chunk's
+    /// blob offset. This is the same boundary at which a future
+    /// object-store backend would translate the request into an S3
+    /// `Range: bytes=...` header against a per-chunk key.
     pub fn read_chunk_range(
         &self,
         dataset_id: &str,
