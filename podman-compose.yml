@@ -1,0 +1,40 @@
+# Phase 0 development compose file.
+#
+# Spins up the Rust API server (LDP + governance + Zarr) and the Deno
+# console SPA. Use:
+#
+#   podman compose up --build
+#
+# The console proxies API calls to the api service via the internal
+# network (`API_BASE=http://api:8080`).
+
+version: "3.9"
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: containers/Containerfile.api
+    image: solid-zarr-api:dev
+    container_name: solid-zarr-api
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./.pod-data:/data:Z
+    environment:
+      CSS_LOG_LEVEL: info
+      CSS_BASE_URL: http://localhost:8080/
+
+  console:
+    build:
+      context: ./governance-console
+      dockerfile: ../containers/Containerfile.console
+    image: governance-console:dev
+    container_name: governance-console
+    depends_on:
+      - api
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: "3000"
+      API_BASE: http://api:8080

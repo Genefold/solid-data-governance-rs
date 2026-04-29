@@ -39,6 +39,11 @@ pub struct Cli {
     /// Logging level (trace | debug | info | warn | error).
     #[arg(short = 'l', long, default_value = "info", env = "CSS_LOG_LEVEL")]
     pub log_level: String,
+
+    /// Directory under which the catalog and chunk store live.
+    /// Defaults to `./.pod-data`.
+    #[arg(long, default_value = "./.pod-data", env = "POD_DATA_DIR")]
+    pub data_dir: std::path::PathBuf,
 }
 
 #[tokio::main]
@@ -84,7 +89,8 @@ async fn main() -> Result<()> {
         log_level: cli.log_level.clone(),
     };
 
-    let pipeline = RequestPipeline::new();
+    let pipeline = RequestPipeline::under(&cli.data_dir)
+        .context("failed to initialise data plane")?;
     let app = App::new(config, pipeline);
 
     app.start().await

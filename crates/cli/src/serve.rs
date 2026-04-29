@@ -60,6 +60,11 @@ pub struct ServeCli {
     /// When absent, the server uses in-memory storage.
     #[arg(long, env = "CSS_ROOT_DIR")]
     pub root_dir: Option<std::path::PathBuf>,
+
+    /// Directory under which the catalog and chunk store live.
+    /// Defaults to `./.pod-data`.
+    #[arg(long, default_value = "./.pod-data", env = "POD_DATA_DIR")]
+    pub data_dir: std::path::PathBuf,
 }
 
 #[tokio::main]
@@ -93,7 +98,8 @@ async fn main() -> Result<()> {
         log_level:    cli.log_level,
     };
 
-    let pipeline = RequestPipeline::new();
+    let pipeline = RequestPipeline::under(&cli.data_dir)
+        .context("failed to initialise data plane")?;
     let app = App::new(config, pipeline);
     app.start().await
 }

@@ -3,6 +3,7 @@
 //! Mirrors the TypeScript `src/init`, `src/server`, and `src/http` modules.
 
 pub mod app;
+pub mod governance;
 pub mod handler;
 pub mod ldp_handlers;
 pub mod middleware;
@@ -11,3 +12,4 @@ pub mod routing;
 pub mod store;
 
 pub use app::App;
+pub use governance::{GovernanceState, governance_router};
