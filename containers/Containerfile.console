@@ -1,0 +1,24 @@
+# Containerfile for the governance console.
+#
+# Build:
+#   podman build -f containers/Containerfile.console -t governance-console:dev ./governance-console
+# Run:
+#   podman run --rm -p 3000:3000 governance-console:dev
+
+FROM docker.io/denoland/deno:alpine-2.1.4 AS builder
+WORKDIR /app
+COPY deno.json ./
+COPY src ./src
+COPY static ./static
+RUN deno cache --reload src/dev.ts src/build.ts \
+    && deno task build
+
+FROM docker.io/denoland/deno:alpine-2.1.4
+WORKDIR /app
+COPY --from=builder /app/static ./static
+COPY --from=builder /app/src ./src
+COPY --from=builder /app/deno.json ./
+ENV PORT=3000 \
+    API_BASE=http://api:8080
+EXPOSE 3000
+ENTRYPOINT ["deno", "run", "-A", "src/dev.ts"]

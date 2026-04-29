@@ -10,6 +10,8 @@ solid-storage = { path = "../solid-storage" }
 authz = { path = "../authz" }
 identity = { path = "../identity" }
 static-assets = { path = "../static-assets" }
+zarr-storage = { path = "../zarr-storage" }
+governance = { path = "../governance" }
 tokio = { workspace = true }
 axum = { workspace = true }
 hyper = { workspace = true }
@@ -20,3 +22,10 @@ tracing = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 uuid.workspace = true
+chrono = { workspace = true }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+tokio = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }

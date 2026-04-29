@@ -1,6 +1,86 @@
-# solid-community-rs
+# solid-data-governance-rs
 
-A Rust port of the [Solid Community Server](https://github.com/CommunitySolidServer/CommunitySolidServer) (CSS) — a standards-compliant [Solid](https://solidproject.org/) server implementing the LDP, WAC, and WebID-TLS specifications.
+A Rust monorepo for the **Genefold** governed data-platform pod-server: a fork of [`solid-community-rs`](https://github.com/tuned-org-uk/solid-community-rs) that adds a governance plane (catalog, DPoP-bound capability tokens, append-only audit) and serves Zarr v3 chunks over HTTP Range so `zarr.open(url)` works against a Solid-addressable dataset.
+
+Phase 0 (foundation) is implemented and validated end-to-end. See [`phase-0-foundation.md`](./phase-0-foundation.md) for the engineering plan and exit criteria, and [`docs-PHASES-INDEX.md`](./docs-PHASES-INDEX.md) for the full phase roadmap.
+
+## Phase 0 quickstart
+
+```bash
+# Build the workspace
+cargo build --workspace
+
+# Run the pod-server (LDP + governance + Zarr) on port 8080
+cargo run -p cli --bin solid-server -- \
+  --port 8080 --host 0.0.0.0 \
+  --data-dir ./.pod-data
+
+# Build and serve the Deno governance console
+cd governance-console
+deno task build
+deno task dev   # http://localhost:3000, proxies API to :8080
+```
+
+Or with Podman:
+
+```bash
+podman compose up --build
+```
+
+Run the full Phase 0 verification (Rust + Deno + container builds):
+
+```bash
+./scripts/bootstrap.sh
+```
+
+## Phase 0 components
+
+| Path | Role |
+|------|------|
+| `crates/server-core` | HTTP pipeline: governance routes layered over the upstream LDP/WAC fallback |
+| `crates/zarr-storage` | Local mmap-backed chunk store, manifest model, Zarr v3 metadata emitter |
+| `crates/governance` | Catalog, DPoP-bound capability tokens, append-only NDJSON audit, access policy |
+| `crates/authz`, `crates/identity`, `crates/http-types`, `crates/solid-storage`, `crates/static-assets` | Upstream LDP/WAC/Solid building blocks (preserved) |
+| `crates/cli` | `solid-server` and `solid-test` binaries |
+| `crates/integration-tests` | Upstream Solid HTTP conformance suites |
+| `governance-console/` | Deno + pure-TypeScript SPA (catalog, dataset detail, token issuer, audit, health) |
+| `containers/` | Podman `Containerfile.api`, `Containerfile.console` |
+| `podman-compose.yml` | Local two-container dev stack |
+| `scripts/bootstrap.sh` | One-command build + lint + test for Rust and Deno |
+| `scripts/python-smoke/` | `zarr.open(url)` smoke test |
+
+## Phase 0 API surface
+
+| Method & path | Purpose |
+|---------------|---------|
+| `PUT  /catalog/{org}/{dataset}` | Register a governed dataset |
+| `GET  /catalog` | List all registered datasets |
+| `GET  /catalog/{org}/{dataset}` | Fetch dataset metadata + policy |
+| `PUT  /catalog/{org}/{dataset}/policy` | Replace the access policy |
+| `POST /catalog/{org}/{dataset}/tokens` | Mint a DPoP-bound capability token |
+| `GET  /catalog/{org}/{dataset}/audit` | Stream the NDJSON audit log |
+| `GET  /datasets/{org}/{dataset}/zarr.json` | Zarr v3 array metadata |
+| `GET  /datasets/{org}/{dataset}/c/{chunk_path}` | Chunk bytes (HTTP Range supported) |
+| `*    /...` | Falls through to the upstream Solid LDP/WAC handler |
+
+## Resource model
+
+Each registered dataset is materialised on disk under `--data-dir/catalog/<org>__<dataset>/`:
+
+```text
+metadata/dataset.jsonld   # registration form input
+policy/access.jsonld      # current AccessPolicy
+audit/events.ndjson       # append-only AuditLog
+stac-item.json            # placeholder STAC item (Phase 2 fills this in)
+```
+
+Its Zarr blob lives separately at `--data-dir/chunks/<org>__<dataset>.bin` with a sibling `<org>__<dataset>.manifest.json` describing chunk offsets, lengths, and SHA-256 checksums.
+
+---
+
+# Upstream solid-community-rs reference
+
+The sections below describe the upstream Rust port of the [Solid Community Server](https://github.com/CommunitySolidServer/CommunitySolidServer) (CSS) — a standards-compliant [Solid](https://solidproject.org/) server implementing the LDP, WAC, and WebID-TLS specifications. The crate paths in the upstream layout below correspond to entries under `crates/` in this repository (e.g. `http-types/` → `crates/http-types/`).
 
 ---
 
